@@ -362,33 +362,37 @@
 (function () {
 "use strict";
 
-var JSONBLOB_BASE = "https://jsonblob.com/api/jsonBlob";
+var KVDB_BASE = "https://kvdb.io";
 var VAULT_KEY = "jong-i-han-jang.vaultId";
 
-async function jbCreate(data) {
-  var res = await fetch(JSONBLOB_BASE, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-    body: JSON.stringify(data)
-  });
-  if (!res.ok) throw new Error('create_failed');
-  var loc = res.headers.get('Location') || res.headers.get('location');
-  if (!loc) throw new Error('no_location');
-  return loc.split('/').filter(Boolean).pop();
+// kvdb.io는 헤더가 아니라 응답 본문(텍스트)만으로 동작해서
+// 브라우저 CORS 헤더 노출 문제를 피할 수 있다. 버킷(볼트 코드)은
+// 우리가 직접 무작위로 만들고, 그 이름으로 바로 읽고 쓰면 된다
+// (별도의 "생성" 절차가 없음).
+function generateVaultCode() {
+  var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 0/O, 1/I 제외
+  var bytes = new Uint32Array(12);
+  crypto.getRandomValues(bytes);
+  var code = '';
+  for (var i = 0; i < 12; i++) code += chars[bytes[i] % chars.length];
+  return code;
 }
-async function jbGet(id) {
-  var res = await fetch(JSONBLOB_BASE + '/' + encodeURIComponent(id), { headers: { 'Accept': 'application/json' } });
+
+async function kvGet(code) {
+  var res = await fetch(KVDB_BASE + '/' + encodeURIComponent(code) + '/notes');
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error('get_failed');
-  return res.json();
+  if (!res.ok) throw new Error('get_failed: ' + res.status);
+  var text = await res.text();
+  if (!text) return { notes: [] };
+  try { return JSON.parse(text); } catch (e) { return { notes: [] }; }
 }
-async function jbPut(id, data) {
-  var res = await fetch(JSONBLOB_BASE + '/' + encodeURIComponent(id), {
+async function kvPut(code, data) {
+  var res = await fetch(KVDB_BASE + '/' + encodeURIComponent(code) + '/notes', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    headers: { 'Content-Type': 'text/plain' },
     body: JSON.stringify(data)
   });
-  if (!res.ok) throw new Error('put_failed');
+  if (!res.ok) throw new Error('put_failed: ' + res.status);
 }
 
 function newNoteId() {
@@ -530,11 +534,13 @@ els.createVaultBtn.addEventListener('click', async function () {
   els.joinError.textContent = '';
   els.createVaultBtn.disabled = true;
   els.createVaultBtn.textContent = '만드는 중…';
+  var code = generateVaultCode();
   try {
-    var id = await jbCreate({ notes: [] });
-    enterVault(id, { reveal: true, initialData: { notes: [] } });
+    await kvPut(code, { notes: [] });
+    enterVault(code, { reveal: true, initialData: { notes: [] } });
   } catch (e) {
-    els.joinError.textContent = '볼트를 만들지 못했어요. 인터넷 연결을 확인하고 다시 시도해주세요.';
+    console.error('볼트 생성 실패:', e);
+    els.joinError.textContent = '볼트를 만들지 못했어요. 인터넷 연결을 확인하고 다시 시도해주세요. (콘솔에 자세한 오류가 있어요)';
   } finally {
     els.createVaultBtn.disabled = false;
     els.createVaultBtn.textContent = '새 볼트 만들기';
@@ -547,14 +553,15 @@ els.joinVaultBtn.addEventListener('click', async function () {
   if (!code) { els.joinError.textContent = '코드를 입력해주세요.'; return; }
   els.joinVaultBtn.disabled = true;
   try {
-    var data = await jbGet(code);
+    var data = await kvGet(code);
     if (data === null) {
       els.joinError.textContent = '해당 코드의 볼트를 찾을 수 없어요. 코드를 다시 확인해주세요.';
       return;
     }
     enterVault(code, { reveal: false, initialData: normalizeState(data) });
   } catch (e) {
-    els.joinError.textContent = '연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해주세요.';
+    console.error('볼트 연결 실패:', e);
+    els.joinError.textContent = '연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해주세요. (콘솔에 자세한 오류가 있어요)';
   } finally {
     els.joinVaultBtn.disabled = false;
   }
@@ -589,7 +596,7 @@ els.vaultInfoLeave.addEventListener('click', function () {
 async function refreshFromServer() {
   if (!vaultId) return;
   try {
-    var data = await jbGet(vaultId);
+    var data = await kvGet(vaultId);
     if (data === null) {
       els.statusLine.textContent = '이 볼트를 찾을 수 없어요. 코드가 맞는지 확인해주세요.';
       return;
@@ -690,7 +697,7 @@ async function createNote() {
   notesState.notes = notesState.notes || [];
   notesState.notes.push(note);
   try {
-    await jbPut(vaultId, notesState);
+    await kvPut(vaultId, notesState);
     goNote(note.id);
   } catch (e) {
     notesState.notes = notesState.notes.filter(function (n) { return n.id !== note.id; });
@@ -726,7 +733,7 @@ var doSave = debounce(function () {
   note.content = els.contentInput.value;
   note.updatedAt = nowIso;
   setSaveStatus('saving');
-  jbPut(vaultId, notesState)
+  kvPut(vaultId, notesState)
     .then(function () { setSaveStatus('saved', nowIso); })
     .catch(function () { els.saveStatus.textContent = '저장 실패 · 인터넷 연결을 확인해주세요'; });
 }, 700);
@@ -758,7 +765,7 @@ function leaveEditorCleaningUpIfEmpty() {
   if (!els.titleInput.value.trim() && !els.contentInput.value.trim()) {
     var id = currentNoteId;
     notesState.notes = notesState.notes.filter(function (n) { return n.id !== id; });
-    jbPut(vaultId, notesState).catch(function () {});
+    kvPut(vaultId, notesState).catch(function () {});
   }
 }
 
@@ -787,7 +794,7 @@ els.confirmOk.addEventListener('click', function () {
   var wasCurrent = id === currentNoteId;
   notesState.notes = notesState.notes.filter(function (n) { return n.id !== id; });
   if (!els.listView.hidden) renderList();
-  jbPut(vaultId, notesState).catch(function () {
+  kvPut(vaultId, notesState).catch(function () {
     els.statusLine.textContent = '삭제를 저장하지 못했어요. 다시 시도해주세요.';
   });
   if (wasCurrent) goList();
