@@ -269,7 +269,7 @@
       <div class="divider">또는</div>
       <div>
         <div class="join-row">
-          <input class="field" id="vaultCodeInput" placeholder="예: 7F2K9QXA3M" autocomplete="off" spellcheck="false">
+          <input class="field" id="vaultCodeInput" placeholder="다른 기기에서 확인한 코드를 붙여넣으세요" autocomplete="off" spellcheck="false">
           <button class="btn btn-ghost" id="joinVaultBtn" type="button" style="border:1px solid var(--border);">연결하기</button>
         </div>
         <div class="form-error" id="joinError"></div>
@@ -358,18 +358,46 @@
   </div>
 </div>
 
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {
-  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, query, orderBy, limit
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js";
+<script>
+(function () {
+"use strict";
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+var JSONBLOB_BASE = "https://jsonblob.com/api/jsonBlob";
+var VAULT_KEY = "jong-i-han-jang.vaultId";
 
-const VAULT_KEY = "jong-i-han-jang.vaultCode";
+async function jbCreate(data) {
+  var res = await fetch(JSONBLOB_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error('create_failed');
+  var loc = res.headers.get('Location') || res.headers.get('location');
+  if (!loc) throw new Error('no_location');
+  return loc.split('/').filter(Boolean).pop();
+}
+async function jbGet(id) {
+  var res = await fetch(JSONBLOB_BASE + '/' + encodeURIComponent(id), { headers: { 'Accept': 'application/json' } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('get_failed');
+  return res.json();
+}
+async function jbPut(id, data) {
+  var res = await fetch(JSONBLOB_BASE + '/' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error('put_failed');
+}
+
+function newNoteId() {
+  return crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+}
+function normalizeState(data) {
+  if (!data || !Array.isArray(data.notes)) return { notes: [] };
+  return data;
+}
 
 var els = {
   vaultChip: document.getElementById('vaultChip'),
@@ -408,13 +436,20 @@ var els = {
   vaultInfoClose: document.getElementById('vaultInfoClose')
 };
 
-var vaultCode = localStorage.getItem(VAULT_KEY) || null;
-var allNotes = [];
-var listUnsub = null;
-var docUnsub = null;
+var vaultId = localStorage.getItem(VAULT_KEY) || null;
+var notesState = { notes: [] };
+var pollTimer = null;
 var currentNoteId = null;
-var isEditorFocused = false;
 var searchTerm = '';
+
+function getNotesSorted() {
+  return (notesState.notes || []).slice().sort(function (a, b) {
+    return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+  });
+}
+function findNote(id) {
+  return (notesState.notes || []).find(function (n) { return n.id === id; });
+}
 
 function debounce(fn, wait) {
   var t = null;
@@ -444,22 +479,6 @@ function escapeHtml(s) {
   });
 }
 
-function generateVaultCode() {
-  var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 0/O, 1/I 제외
-  var bytes = new Uint32Array(10);
-  crypto.getRandomValues(bytes);
-  var code = '';
-  for (var i = 0; i < 10; i++) code += chars[bytes[i] % chars.length];
-  return code;
-}
-
-function notesCollection() {
-  return collection(db, 'vaults', vaultCode, 'notes');
-}
-function noteDoc(id) {
-  return doc(db, 'vaults', vaultCode, 'notes', id);
-}
-
 // ---------------- routing ----------------
 function parseHash() {
   var h = location.hash || '#/';
@@ -471,22 +490,30 @@ function goList() { location.hash = '#/'; }
 function goNote(id) { location.hash = '#/note/' + encodeURIComponent(id); }
 
 function onRouteChange() {
-  if (!vaultCode) return;
+  if (!vaultId) return;
   var route = parseHash();
-  if (route.view === 'edit') showEdit(route.id);
-  else { teardownEditor(); showList(); }
+  if (route.view === 'edit') { stopPolling(); showEdit(route.id); }
+  else { showList(); }
 }
 window.addEventListener('hashchange', onRouteChange);
+window.addEventListener('focus', function () {
+  if (vaultId && !els.listView.hidden) refreshFromServer().then(renderList);
+});
 
 // ---------------- onboarding ----------------
-function enterVault(code, opts) {
-  vaultCode = code;
-  localStorage.setItem(VAULT_KEY, code);
+function updateVaultChip() {
   els.vaultChip.hidden = false;
-  els.vaultChip.textContent = '코드 ' + code.slice(0, 4) + '…';
+  els.vaultChip.textContent = '코드 ' + vaultId.slice(0, 4) + '…';
+}
+
+function enterVault(id, opts) {
+  vaultId = id;
+  localStorage.setItem(VAULT_KEY, id);
+  updateVaultChip();
   els.startView.hidden = true;
+  notesState = (opts && opts.initialData) || { notes: [] };
   if (opts && opts.reveal) {
-    els.revealCode.textContent = code;
+    els.revealCode.textContent = id;
     els.revealView.hidden = false;
   } else {
     startApp();
@@ -495,23 +522,42 @@ function enterVault(code, opts) {
 
 function startApp() {
   els.revealView.hidden = true;
-  location.hash = '#/';
-  subscribeList();
+  if (!location.hash) location.hash = '#/';
   onRouteChange();
 }
 
-els.createVaultBtn.addEventListener('click', function () {
-  enterVault(generateVaultCode(), { reveal: true });
+els.createVaultBtn.addEventListener('click', async function () {
+  els.joinError.textContent = '';
+  els.createVaultBtn.disabled = true;
+  els.createVaultBtn.textContent = '만드는 중…';
+  try {
+    var id = await jbCreate({ notes: [] });
+    enterVault(id, { reveal: true, initialData: { notes: [] } });
+  } catch (e) {
+    els.joinError.textContent = '볼트를 만들지 못했어요. 인터넷 연결을 확인하고 다시 시도해주세요.';
+  } finally {
+    els.createVaultBtn.disabled = false;
+    els.createVaultBtn.textContent = '새 볼트 만들기';
+  }
 });
 
-els.joinVaultBtn.addEventListener('click', function () {
-  var code = els.vaultCodeInput.value.trim().toUpperCase();
+els.joinVaultBtn.addEventListener('click', async function () {
+  var code = els.vaultCodeInput.value.trim();
   els.joinError.textContent = '';
-  if (code.length < 6) {
-    els.joinError.textContent = '코드를 정확히 입력해주세요.';
-    return;
+  if (!code) { els.joinError.textContent = '코드를 입력해주세요.'; return; }
+  els.joinVaultBtn.disabled = true;
+  try {
+    var data = await jbGet(code);
+    if (data === null) {
+      els.joinError.textContent = '해당 코드의 볼트를 찾을 수 없어요. 코드를 다시 확인해주세요.';
+      return;
+    }
+    enterVault(code, { reveal: false, initialData: normalizeState(data) });
+  } catch (e) {
+    els.joinError.textContent = '연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해주세요.';
+  } finally {
+    els.joinVaultBtn.disabled = false;
   }
-  enterVault(code, { reveal: false });
 });
 
 els.copyCodeBtn.addEventListener('click', function () {
@@ -524,12 +570,12 @@ els.copyCodeBtn.addEventListener('click', function () {
 els.continueBtn.addEventListener('click', startApp);
 
 els.vaultChip.addEventListener('click', function () {
-  els.vaultInfoCode.textContent = vaultCode;
+  els.vaultInfoCode.textContent = vaultId;
   els.vaultInfoBackdrop.hidden = false;
 });
 els.vaultInfoClose.addEventListener('click', function () { els.vaultInfoBackdrop.hidden = true; });
 els.vaultInfoCopy.addEventListener('click', function () {
-  navigator.clipboard.writeText(vaultCode).then(function () {
+  navigator.clipboard.writeText(vaultId).then(function () {
     els.vaultInfoCopy.textContent = '복사됨!';
     setTimeout(function () { els.vaultInfoCopy.textContent = '코드 복사'; }, 1500);
   });
@@ -539,16 +585,46 @@ els.vaultInfoLeave.addEventListener('click', function () {
   location.reload();
 });
 
+// ---------------- sync ----------------
+async function refreshFromServer() {
+  if (!vaultId) return;
+  try {
+    var data = await jbGet(vaultId);
+    if (data === null) {
+      els.statusLine.textContent = '이 볼트를 찾을 수 없어요. 코드가 맞는지 확인해주세요.';
+      return;
+    }
+    notesState = normalizeState(data);
+    els.statusLine.textContent = notesState.notes.length ? notesState.notes.length + '개의 메모' : '';
+  } catch (e) {
+    els.statusLine.textContent = '동기화하지 못했어요. 인터넷 연결을 확인해주세요.';
+  }
+}
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(function () {
+    if (!els.listView.hidden) refreshFromServer().then(renderList);
+  }, 15000);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
 // ---------------- list view ----------------
 function showList() {
+  currentNoteId = null;
   els.editView.hidden = true;
   els.listView.hidden = false;
-  renderList();
+  els.statusLine.textContent = '불러오는 중…';
+  refreshFromServer().then(function () {
+    renderList();
+    startPolling();
+  });
 }
 
 function renderList() {
   var term = searchTerm.trim().toLowerCase();
-  var notes = allNotes;
+  var notes = getNotesSorted();
   if (term) {
     notes = notes.filter(function (n) {
       return (n.title || '').toLowerCase().indexOf(term) !== -1 ||
@@ -558,7 +634,7 @@ function renderList() {
 
   els.noteList.innerHTML = '';
 
-  if (allNotes.length === 0) {
+  if ((notesState.notes || []).length === 0) {
     els.emptyState.hidden = false;
     els.emptyStateText.textContent = '아직 메모가 없어요.';
     return;
@@ -607,28 +683,21 @@ els.searchInput.addEventListener('input', function () {
   renderList();
 });
 
-function subscribeList() {
-  var q = query(notesCollection(), orderBy('updatedAt', 'desc'), limit(200));
-  listUnsub = onSnapshot(q, function (snap) {
-    allNotes = snap.docs.map(function (d) {
-      var data = d.data() || {};
-      return { id: d.id, title: data.title || '', content: data.content || '',
-                createdAt: data.createdAt, updatedAt: data.updatedAt };
-    });
-    els.statusLine.textContent = allNotes.length ? allNotes.length + '개의 메모' : '';
-    if (els.listView.hidden === false) renderList();
-  }, function (err) {
-    els.statusLine.textContent = '목록을 불러오지 못했어요 (' + err.code + ')';
-  });
-}
-
-function createNote() {
-  var nowIso = new Date().toISOString();
+async function createNote() {
   els.newNoteBtn.disabled = true;
-  addDoc(notesCollection(), { title: '', content: '', createdAt: nowIso, updatedAt: nowIso })
-    .then(function (ref) { goNote(ref.id); })
-    .catch(function (err) { els.statusLine.textContent = '새 메모를 만들지 못했어요 (' + err.code + ')'; })
-    .finally(function () { els.newNoteBtn.disabled = false; });
+  var nowIso = new Date().toISOString();
+  var note = { id: newNoteId(), title: '', content: '', createdAt: nowIso, updatedAt: nowIso };
+  notesState.notes = notesState.notes || [];
+  notesState.notes.push(note);
+  try {
+    await jbPut(vaultId, notesState);
+    goNote(note.id);
+  } catch (e) {
+    notesState.notes = notesState.notes.filter(function (n) { return n.id !== note.id; });
+    els.statusLine.textContent = '새 메모를 만들지 못했어요. 다시 시도해주세요.';
+  } finally {
+    els.newNoteBtn.disabled = false;
+  }
 }
 els.newNoteBtn.addEventListener('click', createNote);
 els.emptyNewBtn.addEventListener('click', createNote);
@@ -650,11 +719,16 @@ function setSaveStatus(state, whenIso) {
 
 var doSave = debounce(function () {
   if (!currentNoteId) return;
-  setSaveStatus('saving');
+  var note = findNote(currentNoteId);
+  if (!note) return;
   var nowIso = new Date().toISOString();
-  updateDoc(noteDoc(currentNoteId), { title: els.titleInput.value, content: els.contentInput.value, updatedAt: nowIso })
+  note.title = els.titleInput.value;
+  note.content = els.contentInput.value;
+  note.updatedAt = nowIso;
+  setSaveStatus('saving');
+  jbPut(vaultId, notesState)
     .then(function () { setSaveStatus('saved', nowIso); })
-    .catch(function (err) { els.saveStatus.textContent = '저장 실패 (' + err.code + ')'; });
+    .catch(function () { els.saveStatus.textContent = '저장 실패 · 인터넷 연결을 확인해주세요'; });
 }, 700);
 
 function onEditorInput() {
@@ -668,48 +742,28 @@ function showEdit(id) {
   els.listView.hidden = true;
   els.editView.hidden = false;
   currentNoteId = id;
-  els.titleInput.value = '';
-  els.contentInput.value = '';
-  els.createdMeta.textContent = '';
-  setSaveStatus('');
+  var note = findNote(id);
+  if (!note) { goList(); return; }
+  els.titleInput.value = note.title || '';
+  els.contentInput.value = note.content || '';
+  autoGrow(els.contentInput);
   updateCharCount();
-
-  docUnsub = onSnapshot(noteDoc(id), function (snap) {
-    if (!snap.exists()) { goList(); return; }
-    var data = snap.data() || {};
-    if (document.activeElement !== els.titleInput) els.titleInput.value = data.title || '';
-    if (document.activeElement !== els.contentInput) {
-      els.contentInput.value = data.content || '';
-      autoGrow(els.contentInput);
-      updateCharCount();
-    }
-    els.createdMeta.textContent = data.createdAt ? ('작성 ' + relativeTime(data.createdAt)) : '';
-    if (!isEditorFocused) setSaveStatus('saved', data.updatedAt);
-  }, function (err) {
-    els.saveStatus.textContent = '불러오지 못했어요 (' + err.code + ')';
-  });
-
+  els.createdMeta.textContent = note.createdAt ? ('작성 ' + relativeTime(note.createdAt)) : '';
+  setSaveStatus('saved', note.updatedAt);
   setTimeout(function () { els.titleInput.focus(); }, 0);
-}
-
-function teardownEditor() {
-  if (docUnsub) { docUnsub(); docUnsub = null; }
-  currentNoteId = null;
 }
 
 function leaveEditorCleaningUpIfEmpty() {
   if (!currentNoteId) return;
   if (!els.titleInput.value.trim() && !els.contentInput.value.trim()) {
-    deleteDoc(noteDoc(currentNoteId)).catch(function () {});
+    var id = currentNoteId;
+    notesState.notes = notesState.notes.filter(function (n) { return n.id !== id; });
+    jbPut(vaultId, notesState).catch(function () {});
   }
 }
 
 els.titleInput.addEventListener('input', onEditorInput);
 els.contentInput.addEventListener('input', onEditorInput);
-[els.titleInput, els.contentInput].forEach(function (el) {
-  el.addEventListener('focus', function () { isEditorFocused = true; });
-  el.addEventListener('blur', function () { isEditorFocused = false; });
-});
 
 els.backBtn.addEventListener('click', function () {
   leaveEditorCleaningUpIfEmpty();
@@ -731,17 +785,22 @@ els.confirmOk.addEventListener('click', function () {
   closeConfirm();
   if (!id) return;
   var wasCurrent = id === currentNoteId;
-  deleteDoc(noteDoc(id)).then(function () { if (wasCurrent) goList(); }).catch(function () {});
+  notesState.notes = notesState.notes.filter(function (n) { return n.id !== id; });
+  if (!els.listView.hidden) renderList();
+  jbPut(vaultId, notesState).catch(function () {
+    els.statusLine.textContent = '삭제를 저장하지 못했어요. 다시 시도해주세요.';
+  });
+  if (wasCurrent) goList();
 });
 els.deleteBtn.addEventListener('click', function () { if (currentNoteId) confirmDelete(currentNoteId); });
 
 // ---------------- boot ----------------
-if (vaultCode) {
-  els.vaultChip.hidden = false;
-  els.vaultChip.textContent = '코드 ' + vaultCode.slice(0, 4) + '…';
+if (vaultId) {
+  updateVaultChip();
   els.startView.hidden = true;
   startApp();
 }
+})();
 </script>
 </body>
 </html>
