@@ -362,36 +362,48 @@
 (function () {
 "use strict";
 
-var KVDB_BASE = "https://kvdb.io";
+var STORE_BASE = "https://www.jsonstore.io";
 var VAULT_KEY = "jong-i-han-jang.vaultId";
 
-// kvdb.io는 버킷을 먼저 만들어야 한다: 빈 POST 요청을 보내면
-// 응답 "본문"(텍스트)에 버킷 ID가 온다 (헤더가 아니라서 CORS 노출
-// 문제가 없다). 그 ID를 볼트 코드로 쓰고, 그 안의 "notes" 키를
-// 읽고 쓰면 된다.
-async function kvCreateBucket() {
-  var res = await fetch(KVDB_BASE + '/', { method: 'POST' });
-  if (!res.ok) throw new Error('bucket_create_failed: ' + res.status);
-  var id = (await res.text()).trim();
-  if (!id) throw new Error('bucket_create_empty');
-  return id;
+// jsonstore.io는 별도의 "생성" 단계가 없다: 아무 경로(볼트 코드)에
+// 바로 GET/POST 하면 그 자리에서 만들어지고, 성공 여부와 값 모두
+// 응답 "본문"(JSON)만으로 알 수 있어서 헤더를 읽을 필요가 없다.
+// (앞서 jsonblob은 헤더 문제로, kvdb.io는 별도 생성 단계의 서버
+// 오류로 실패했음 — 둘 다 이 구조에서는 해당하지 않는다.)
+function generateVaultCode() {
+  var chars = 'abcdefghijkmnpqrstuvwxyz23456789'; // 헷갈리는 0/o, 1/l 제외
+  var bytes = new Uint32Array(16);
+  crypto.getRandomValues(bytes);
+  var code = '';
+  for (var i = 0; i < 16; i++) code += chars[bytes[i] % chars.length];
+  return code;
+}
+
+async function fetchWithRetry(url, opts) {
+  try {
+    return await fetch(url, opts);
+  } catch (e) {
+    await new Promise(function (r) { setTimeout(r, 700); });
+    return fetch(url, opts);
+  }
 }
 
 async function kvGet(code) {
-  var res = await fetch(KVDB_BASE + '/' + encodeURIComponent(code) + '/notes');
-  if (res.status === 404) return null;
+  var res = await fetchWithRetry(STORE_BASE + '/' + encodeURIComponent(code));
   if (!res.ok) throw new Error('get_failed: ' + res.status);
-  var text = await res.text();
-  if (!text) return { notes: [] };
-  try { return JSON.parse(text); } catch (e) { return { notes: [] }; }
+  var json = await res.json();
+  if (!json || json.ok !== true) throw new Error('get_not_ok');
+  return json.result; // 값이 없으면 null
 }
 async function kvPut(code, data) {
-  var res = await fetch(KVDB_BASE + '/' + encodeURIComponent(code) + '/notes', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'text/plain' },
+  var res = await fetchWithRetry(STORE_BASE + '/' + encodeURIComponent(code), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
   if (!res.ok) throw new Error('put_failed: ' + res.status);
+  var json = await res.json();
+  if (!json || json.ok !== true) throw new Error('put_not_ok');
 }
 
 function newNoteId() {
@@ -533,8 +545,8 @@ els.createVaultBtn.addEventListener('click', async function () {
   els.joinError.textContent = '';
   els.createVaultBtn.disabled = true;
   els.createVaultBtn.textContent = '만드는 중…';
+  var code = generateVaultCode();
   try {
-    var code = await kvCreateBucket();
     await kvPut(code, { notes: [] });
     enterVault(code, { reveal: true, initialData: { notes: [] } });
   } catch (e) {
