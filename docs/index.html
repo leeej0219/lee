@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>종이 한 장</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Work+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #eceee6;
+    --surface: #ffffff;
+    --surface-sunken: #f4f5ef;
+    --ink: #23261f;
+    --ink-soft: #676e5f;
+    --ink-faint: #9aa090;
+    --accent: #37469b;
+    --accent-ink: #ffffff;
+    --accent-soft: #e2e5f6;
+    --danger: #a8492b;
+    --danger-soft: #f3e2da;
+    --border: #d9dccb;
+    --shadow: 220 20% 20%;
+    --focus-ring: #37469b;
+    color-scheme: light dark;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1e1a;
+      --surface: #26281f;
+      --surface-sunken: #202219;
+      --ink: #ece9de;
+      --ink-soft: #a7ac9b;
+      --ink-faint: #6d7264;
+      --accent: #8d9bf2;
+      --accent-ink: #171a2c;
+      --accent-soft: #2b3050;
+      --danger: #e3906f;
+      --danger-soft: #3a2a24;
+      --border: #3a3d31;
+      --focus-ring: #8d9bf2;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { margin: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Work Sans', system-ui, -apple-system, sans-serif;
+    padding-inline: 20px;
+    padding-block: 24px;
+    min-height: 100vh;
+    background-image: radial-gradient(circle, color-mix(in srgb, var(--ink) 6%, transparent) 1px, transparent 1.4px);
+    background-size: 22px 22px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+
+  .shell { max-width: 640px; margin-inline: auto; }
+
+  h1, h2, h3 { font-family: 'Fraunces', Georgia, serif; text-wrap: balance; margin: 0; }
+  button, input, textarea { font-family: inherit; }
+  a { color: inherit; }
+
+  .brand { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 22px; }
+  .brand .left { display: flex; align-items: center; gap: 10px; }
+  .brand svg { flex: none; }
+  .brand .mark-fold { fill: var(--surface); stroke: var(--ink-soft); stroke-width: 1.2; }
+  .brand .mark-corner { fill: var(--ink-faint); }
+  .brand h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; }
+
+  .vault-chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 5px 9px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .vault-chip:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---------- shared buttons / inputs ---------- */
+  .btn {
+    appearance: none; border: none; cursor: pointer;
+    font-size: 0.95rem; font-weight: 500; border-radius: 10px;
+    padding-inline: 16px; height: 42px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: transform 0.12s ease, background 0.12s ease;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, black 6%); }
+  .btn-ghost { background: transparent; color: var(--ink-soft); padding-inline: 10px; }
+  .btn-ghost:hover { background: var(--surface-sunken); color: var(--ink); }
+  .btn-danger { background: var(--danger-soft); color: var(--danger); }
+  .btn-danger:hover { background: color-mix(in srgb, var(--danger-soft) 70%, var(--danger) 20%); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  button:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--focus-ring); outline-offset: 2px;
+  }
+
+  .field {
+    width: 100%; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 11px 13px; font-size: 0.95rem; color: var(--ink);
+  }
+  .field::placeholder { color: var(--ink-faint); }
+
+  /* ---------- start (onboarding) view ---------- */
+  #startView .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 26px; display: flex; flex-direction: column; gap: 16px;
+  }
+  #startView p { color: var(--ink-soft); font-size: 0.92rem; line-height: 1.6; margin: 0; }
+  .divider { display: flex; align-items: center; gap: 10px; color: var(--ink-faint); font-size: 0.8rem; }
+  .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .join-row { display: flex; gap: 8px; }
+  .join-row .field { flex: 1; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.04em; }
+  .form-error { color: var(--danger); font-size: 0.85rem; min-height: 1.2em; }
+
+  .code-reveal {
+    background: var(--surface-sunken); border: 1px dashed var(--border); border-radius: 10px;
+    padding: 18px; text-align: center; display: flex; flex-direction: column; gap: 10px;
+  }
+  .code-reveal .code {
+    font-family: 'IBM Plex Mono', monospace; font-size: 1.3rem; letter-spacing: 0.08em;
+    color: var(--ink); word-break: break-all;
+  }
+
+  /* ---------- list view ---------- */
+  .toolbar { display: flex; gap: 10px; margin-bottom: 18px; }
+  .search {
+    flex: 1; display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding-inline: 12px; height: 42px;
+  }
+  .search svg { flex: none; opacity: 0.55; }
+  .search input { all: unset; flex: 1; font-size: 0.95rem; color: var(--ink); }
+  .search input::placeholder { color: var(--ink-faint); }
+
+  .status-line {
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: var(--ink-faint);
+    margin-bottom: 14px; min-height: 1em;
+  }
+
+  .note-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+
+  .note-card {
+    position: relative; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 4px;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .note-card:hover, .note-card:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    box-shadow: 0 2px 10px color-mix(in srgb, hsl(var(--shadow)) 10%, transparent);
+  }
+  .note-card .row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .note-title {
+    font-family: 'Fraunces', Georgia, serif; font-size: 1.05rem; font-weight: 600; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .note-title.placeholder { color: var(--ink-faint); font-style: italic; font-weight: 500; }
+  .note-time { flex: none; font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem; color: var(--ink-faint); }
+  .note-preview {
+    font-size: 0.88rem; color: var(--ink-soft);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; line-height: 1.4; min-height: 1.4em;
+  }
+  .note-preview.placeholder { color: var(--ink-faint); font-style: italic; }
+
+  .note-delete {
+    position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 8px;
+    border: none; background: transparent; color: var(--ink-faint);
+    display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0.6;
+  }
+  .note-delete:hover, .note-delete:focus-visible { opacity: 1; background: var(--danger-soft); color: var(--danger); }
+
+  .empty-state { text-align: center; padding-block: 56px 40px; color: var(--ink-soft); }
+  .empty-state svg { margin-bottom: 14px; opacity: 0.7; }
+  .empty-state p { margin: 0 0 18px; font-size: 0.95rem; }
+
+  .notice {
+    background: var(--surface-sunken); border: 1px dashed var(--border); border-radius: 10px;
+    padding: 12px 14px; font-size: 0.85rem; color: var(--ink-soft); margin-bottom: 16px;
+  }
+
+  /* ---------- editor view ---------- */
+  #editView { display: flex; flex-direction: column; gap: 14px; }
+  .edit-topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .edit-topbar .left { display: flex; align-items: center; gap: 8px; }
+  .save-status { font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: var(--ink-faint); }
+
+  .paper {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 22px 22px 16px; display: flex; flex-direction: column; gap: 10px; min-height: 60vh;
+  }
+  .title-input {
+    all: unset; font-family: 'Fraunces', Georgia, serif; font-size: 1.5rem; font-weight: 600;
+    color: var(--ink); border-bottom: 1px solid var(--border); padding-bottom: 10px;
+  }
+  .title-input::placeholder { color: var(--ink-faint); font-weight: 500; }
+  .content-input {
+    all: unset; font-family: 'Work Sans', system-ui, sans-serif; font-size: 1rem; line-height: 1.7;
+    color: var(--ink); resize: none; overflow: hidden; min-height: 40vh; max-width: 65ch;
+  }
+  .content-input::placeholder { color: var(--ink-faint); }
+  .paper-footer {
+    display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem; color: var(--ink-faint); border-top: 1px solid var(--border);
+    padding-top: 10px; margin-top: auto;
+  }
+
+  /* ---------- confirm modal ---------- */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: color-mix(in srgb, hsl(var(--shadow)) 45%, transparent);
+    display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 10;
+  }
+  .modal {
+    background: var(--surface); border-radius: 12px; padding: 20px; max-width: 320px; width: 100%;
+    display: flex; flex-direction: column; gap: 14px;
+    box-shadow: 0 12px 40px color-mix(in srgb, hsl(var(--shadow)) 30%, transparent);
+  }
+  .modal p { margin: 0; font-size: 0.92rem; color: var(--ink); }
+  .modal .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+  [hidden] { display: none !important; }
+
+  @media (max-width: 460px) {
+    .toolbar { flex-direction: column; }
+    .btn-primary { justify-content: center; }
+    .paper { padding: 16px 16px 12px; min-height: 55vh; }
+    .title-input { font-size: 1.3rem; }
+    .join-row { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="brand">
+    <div class="left">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+        <path class="mark-fold" d="M5 3h13l5 5v17H5z" />
+        <path class="mark-corner" d="M18 3l5 5h-5z" />
+      </svg>
+      <h1>종이 한 장</h1>
+    </div>
+    <button class="vault-chip" id="vaultChip" type="button" hidden>코드 ····</button>
+  </div>
+
+  <!-- START (onboarding) VIEW -->
+  <main id="startView">
+    <div class="card">
+      <div>
+        <h2 style="font-size:1.15rem; margin-bottom:6px;">시작하기</h2>
+        <p>이 메모장은 "볼트 코드"로 기기를 연결해요. 코드를 아는 사람만 메모를 볼 수 있어요. 로그인은 필요 없습니다.</p>
+      </div>
+      <button class="btn btn-primary" id="createVaultBtn" type="button">새 볼트 만들기</button>
+      <div class="divider">또는</div>
+      <div>
+        <div class="join-row">
+          <input class="field" id="vaultCodeInput" placeholder="예: 7F2K9QXA3M" autocomplete="off" spellcheck="false">
+          <button class="btn btn-ghost" id="joinVaultBtn" type="button" style="border:1px solid var(--border);">연결하기</button>
+        </div>
+        <div class="form-error" id="joinError"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- CODE REVEAL VIEW (right after creating a vault) -->
+  <main id="revealView" hidden>
+    <div class="card">
+      <h2 style="font-size:1.15rem;">볼트가 만들어졌어요</h2>
+      <p>이 코드를 다른 기기(휴대폰 등)에도 입력하면 같은 메모를 볼 수 있어요. <strong>코드를 잃어버리면 메모를 되찾을 수 없으니</strong> 안전한 곳에 적어두세요.</p>
+      <div class="code-reveal">
+        <span class="code" id="revealCode"></span>
+        <button class="btn btn-ghost" id="copyCodeBtn" type="button" style="border:1px solid var(--border); align-self:center;">코드 복사</button>
+      </div>
+      <button class="btn btn-primary" id="continueBtn" type="button">메모 쓰러 가기</button>
+    </div>
+  </main>
+
+  <!-- LIST VIEW -->
+  <main id="listView" hidden>
+    <div class="toolbar">
+      <label class="search">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="11" y1="11" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <input id="searchInput" type="text" placeholder="메모 검색" autocomplete="off">
+      </label>
+      <button class="btn btn-primary" id="newNoteBtn" type="button">
+        <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true"><path d="M7.5 2v11M2 7.5h11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        새 메모
+      </button>
+    </div>
+    <div class="status-line" id="statusLine"></div>
+    <ul class="note-list" id="noteList"></ul>
+    <div class="empty-state" id="emptyState" hidden>
+      <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><path d="M8 4h18l8 8v24H8z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M26 4v8h8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      <p id="emptyStateText">아직 메모가 없어요.</p>
+      <button class="btn btn-primary" id="emptyNewBtn" type="button">첫 메모 쓰기</button>
+    </div>
+  </main>
+
+  <!-- EDIT VIEW -->
+  <main id="editView" hidden>
+    <div class="edit-topbar">
+      <div class="left">
+        <button class="btn btn-ghost" id="backBtn" type="button">
+          <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true"><path d="M9.5 2.5L4 7.5l5.5 5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          목록
+        </button>
+        <span class="save-status" id="saveStatus"></span>
+      </div>
+      <button class="btn btn-danger" id="deleteBtn" type="button">삭제</button>
+    </div>
+    <div class="paper">
+      <input class="title-input" id="titleInput" type="text" placeholder="제목" maxlength="200">
+      <textarea class="content-input" id="contentInput" placeholder="여기에 적어보세요…"></textarea>
+      <div class="paper-footer">
+        <span id="charCount">0자</span>
+        <span id="createdMeta"></span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-backdrop" id="confirmBackdrop" hidden>
+  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmText">
+    <p id="confirmText">이 메모를 삭제할까요? 되돌릴 수 없어요.</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="confirmCancel" type="button">취소</button>
+      <button class="btn btn-danger" id="confirmOk" type="button">삭제</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="vaultInfoBackdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="vaultInfoTitle">
+    <p id="vaultInfoTitle"><strong>내 볼트 코드</strong></p>
+    <div class="code-reveal">
+      <span class="code" id="vaultInfoCode"></span>
+      <button class="btn btn-ghost" id="vaultInfoCopy" type="button" style="border:1px solid var(--border); align-self:center;">코드 복사</button>
+    </div>
+    <div class="modal-actions" style="justify-content:space-between;">
+      <button class="btn btn-danger" id="vaultInfoLeave" type="button">이 기기에서 연결 해제</button>
+      <button class="btn btn-ghost" id="vaultInfoClose" type="button">닫기</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc,
+  onSnapshot, query, orderBy, limit
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { firebaseConfig } from "./firebase-config.js";
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+const VAULT_KEY = "jong-i-han-jang.vaultCode";
+
+var els = {
+  vaultChip: document.getElementById('vaultChip'),
+  startView: document.getElementById('startView'),
+  revealView: document.getElementById('revealView'),
+  listView: document.getElementById('listView'),
+  editView: document.getElementById('editView'),
+  createVaultBtn: document.getElementById('createVaultBtn'),
+  vaultCodeInput: document.getElementById('vaultCodeInput'),
+  joinVaultBtn: document.getElementById('joinVaultBtn'),
+  joinError: document.getElementById('joinError'),
+  revealCode: document.getElementById('revealCode'),
+  copyCodeBtn: document.getElementById('copyCodeBtn'),
+  continueBtn: document.getElementById('continueBtn'),
+  statusLine: document.getElementById('statusLine'),
+  noteList: document.getElementById('noteList'),
+  emptyState: document.getElementById('emptyState'),
+  emptyStateText: document.getElementById('emptyStateText'),
+  searchInput: document.getElementById('searchInput'),
+  newNoteBtn: document.getElementById('newNoteBtn'),
+  emptyNewBtn: document.getElementById('emptyNewBtn'),
+  backBtn: document.getElementById('backBtn'),
+  deleteBtn: document.getElementById('deleteBtn'),
+  saveStatus: document.getElementById('saveStatus'),
+  titleInput: document.getElementById('titleInput'),
+  contentInput: document.getElementById('contentInput'),
+  charCount: document.getElementById('charCount'),
+  createdMeta: document.getElementById('createdMeta'),
+  confirmBackdrop: document.getElementById('confirmBackdrop'),
+  confirmCancel: document.getElementById('confirmCancel'),
+  confirmOk: document.getElementById('confirmOk'),
+  vaultInfoBackdrop: document.getElementById('vaultInfoBackdrop'),
+  vaultInfoCode: document.getElementById('vaultInfoCode'),
+  vaultInfoCopy: document.getElementById('vaultInfoCopy'),
+  vaultInfoLeave: document.getElementById('vaultInfoLeave'),
+  vaultInfoClose: document.getElementById('vaultInfoClose')
+};
+
+var vaultCode = localStorage.getItem(VAULT_KEY) || null;
+var allNotes = [];
+var listUnsub = null;
+var docUnsub = null;
+var currentNoteId = null;
+var isEditorFocused = false;
+var searchTerm = '';
+
+function debounce(fn, wait) {
+  var t = null;
+  return function () {
+    var args = arguments;
+    clearTimeout(t);
+    t = setTimeout(function () { fn.apply(null, args); }, wait);
+  };
+}
+
+function relativeTime(iso) {
+  if (!iso) return '';
+  var diff = Date.now() - new Date(iso).getTime();
+  var min = Math.floor(diff / 60000);
+  if (min < 1) return '방금';
+  if (min < 60) return min + '분 전';
+  var hr = Math.floor(min / 60);
+  if (hr < 24) return hr + '시간 전';
+  var day = Math.floor(hr / 24);
+  if (day < 7) return day + '일 전';
+  return new Date(iso).toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function generateVaultCode() {
+  var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 0/O, 1/I 제외
+  var bytes = new Uint32Array(10);
+  crypto.getRandomValues(bytes);
+  var code = '';
+  for (var i = 0; i < 10; i++) code += chars[bytes[i] % chars.length];
+  return code;
+}
+
+function notesCollection() {
+  return collection(db, 'vaults', vaultCode, 'notes');
+}
+function noteDoc(id) {
+  return doc(db, 'vaults', vaultCode, 'notes', id);
+}
+
+// ---------------- routing ----------------
+function parseHash() {
+  var h = location.hash || '#/';
+  var m = h.match(/^#\/note\/(.+)$/);
+  if (m) return { view: 'edit', id: decodeURIComponent(m[1]) };
+  return { view: 'list' };
+}
+function goList() { location.hash = '#/'; }
+function goNote(id) { location.hash = '#/note/' + encodeURIComponent(id); }
+
+function onRouteChange() {
+  if (!vaultCode) return;
+  var route = parseHash();
+  if (route.view === 'edit') showEdit(route.id);
+  else { teardownEditor(); showList(); }
+}
+window.addEventListener('hashchange', onRouteChange);
+
+// ---------------- onboarding ----------------
+function enterVault(code, opts) {
+  vaultCode = code;
+  localStorage.setItem(VAULT_KEY, code);
+  els.vaultChip.hidden = false;
+  els.vaultChip.textContent = '코드 ' + code.slice(0, 4) + '…';
+  els.startView.hidden = true;
+  if (opts && opts.reveal) {
+    els.revealCode.textContent = code;
+    els.revealView.hidden = false;
+  } else {
+    startApp();
+  }
+}
+
+function startApp() {
+  els.revealView.hidden = true;
+  location.hash = '#/';
+  subscribeList();
+  onRouteChange();
+}
+
+els.createVaultBtn.addEventListener('click', function () {
+  enterVault(generateVaultCode(), { reveal: true });
+});
+
+els.joinVaultBtn.addEventListener('click', function () {
+  var code = els.vaultCodeInput.value.trim().toUpperCase();
+  els.joinError.textContent = '';
+  if (code.length < 6) {
+    els.joinError.textContent = '코드를 정확히 입력해주세요.';
+    return;
+  }
+  enterVault(code, { reveal: false });
+});
+
+els.copyCodeBtn.addEventListener('click', function () {
+  navigator.clipboard.writeText(els.revealCode.textContent).then(function () {
+    els.copyCodeBtn.textContent = '복사됨!';
+    setTimeout(function () { els.copyCodeBtn.textContent = '코드 복사'; }, 1500);
+  });
+});
+
+els.continueBtn.addEventListener('click', startApp);
+
+els.vaultChip.addEventListener('click', function () {
+  els.vaultInfoCode.textContent = vaultCode;
+  els.vaultInfoBackdrop.hidden = false;
+});
+els.vaultInfoClose.addEventListener('click', function () { els.vaultInfoBackdrop.hidden = true; });
+els.vaultInfoCopy.addEventListener('click', function () {
+  navigator.clipboard.writeText(vaultCode).then(function () {
+    els.vaultInfoCopy.textContent = '복사됨!';
+    setTimeout(function () { els.vaultInfoCopy.textContent = '코드 복사'; }, 1500);
+  });
+});
+els.vaultInfoLeave.addEventListener('click', function () {
+  localStorage.removeItem(VAULT_KEY);
+  location.reload();
+});
+
+// ---------------- list view ----------------
+function showList() {
+  els.editView.hidden = true;
+  els.listView.hidden = false;
+  renderList();
+}
+
+function renderList() {
+  var term = searchTerm.trim().toLowerCase();
+  var notes = allNotes;
+  if (term) {
+    notes = notes.filter(function (n) {
+      return (n.title || '').toLowerCase().indexOf(term) !== -1 ||
+             (n.content || '').toLowerCase().indexOf(term) !== -1;
+    });
+  }
+
+  els.noteList.innerHTML = '';
+
+  if (allNotes.length === 0) {
+    els.emptyState.hidden = false;
+    els.emptyStateText.textContent = '아직 메모가 없어요.';
+    return;
+  }
+  if (notes.length === 0) {
+    els.emptyState.hidden = false;
+    els.emptyStateText.textContent = '검색 결과가 없어요.';
+    return;
+  }
+  els.emptyState.hidden = true;
+
+  notes.forEach(function (n) {
+    var li = document.createElement('li');
+    li.className = 'note-card';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+
+    var titleText = (n.title || '').trim();
+    var previewText = (n.content || '').trim();
+
+    li.innerHTML =
+      '<div class="row-top">' +
+        '<span class="note-title' + (titleText ? '' : ' placeholder') + '">' + escapeHtml(titleText || '제목 없음') + '</span>' +
+        '<span class="note-time">' + relativeTime(n.updatedAt) + '</span>' +
+      '</div>' +
+      '<div class="note-preview' + (previewText ? '' : ' placeholder') + '">' + escapeHtml(previewText || '내용 없음') + '</div>' +
+      '<button class="note-delete" type="button" aria-label="메모 삭제" data-id="' + n.id + '">' +
+        '<svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true"><path d="M3 4h9M6 4V2.5h3V4M4.5 4l.6 8.5h4.8l.6-8.5" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      '</button>';
+
+    li.addEventListener('click', function () { goNote(n.id); });
+    li.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goNote(n.id); }
+    });
+    li.querySelector('.note-delete').addEventListener('click', function (e) {
+      e.stopPropagation();
+      confirmDelete(n.id);
+    });
+
+    els.noteList.appendChild(li);
+  });
+}
+
+els.searchInput.addEventListener('input', function () {
+  searchTerm = els.searchInput.value;
+  renderList();
+});
+
+function subscribeList() {
+  var q = query(notesCollection(), orderBy('updatedAt', 'desc'), limit(200));
+  listUnsub = onSnapshot(q, function (snap) {
+    allNotes = snap.docs.map(function (d) {
+      var data = d.data() || {};
+      return { id: d.id, title: data.title || '', content: data.content || '',
+                createdAt: data.createdAt, updatedAt: data.updatedAt };
+    });
+    els.statusLine.textContent = allNotes.length ? allNotes.length + '개의 메모' : '';
+    if (els.listView.hidden === false) renderList();
+  }, function (err) {
+    els.statusLine.textContent = '목록을 불러오지 못했어요 (' + err.code + ')';
+  });
+}
+
+function createNote() {
+  var nowIso = new Date().toISOString();
+  els.newNoteBtn.disabled = true;
+  addDoc(notesCollection(), { title: '', content: '', createdAt: nowIso, updatedAt: nowIso })
+    .then(function (ref) { goNote(ref.id); })
+    .catch(function (err) { els.statusLine.textContent = '새 메모를 만들지 못했어요 (' + err.code + ')'; })
+    .finally(function () { els.newNoteBtn.disabled = false; });
+}
+els.newNoteBtn.addEventListener('click', createNote);
+els.emptyNewBtn.addEventListener('click', createNote);
+
+// ---------------- editor view ----------------
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.max(el.scrollHeight, 1) + 'px';
+}
+function updateCharCount() {
+  els.charCount.textContent = els.contentInput.value.length.toLocaleString('ko-KR') + '자';
+}
+function setSaveStatus(state, whenIso) {
+  if (state === 'typing') els.saveStatus.textContent = '입력 중…';
+  else if (state === 'saving') els.saveStatus.textContent = '저장 중…';
+  else if (state === 'saved') els.saveStatus.textContent = '저장됨 · ' + relativeTime(whenIso || new Date().toISOString());
+  else els.saveStatus.textContent = '';
+}
+
+var doSave = debounce(function () {
+  if (!currentNoteId) return;
+  setSaveStatus('saving');
+  var nowIso = new Date().toISOString();
+  updateDoc(noteDoc(currentNoteId), { title: els.titleInput.value, content: els.contentInput.value, updatedAt: nowIso })
+    .then(function () { setSaveStatus('saved', nowIso); })
+    .catch(function (err) { els.saveStatus.textContent = '저장 실패 (' + err.code + ')'; });
+}, 700);
+
+function onEditorInput() {
+  setSaveStatus('typing');
+  autoGrow(els.contentInput);
+  updateCharCount();
+  doSave();
+}
+
+function showEdit(id) {
+  els.listView.hidden = true;
+  els.editView.hidden = false;
+  currentNoteId = id;
+  els.titleInput.value = '';
+  els.contentInput.value = '';
+  els.createdMeta.textContent = '';
+  setSaveStatus('');
+  updateCharCount();
+
+  docUnsub = onSnapshot(noteDoc(id), function (snap) {
+    if (!snap.exists()) { goList(); return; }
+    var data = snap.data() || {};
+    if (document.activeElement !== els.titleInput) els.titleInput.value = data.title || '';
+    if (document.activeElement !== els.contentInput) {
+      els.contentInput.value = data.content || '';
+      autoGrow(els.contentInput);
+      updateCharCount();
+    }
+    els.createdMeta.textContent = data.createdAt ? ('작성 ' + relativeTime(data.createdAt)) : '';
+    if (!isEditorFocused) setSaveStatus('saved', data.updatedAt);
+  }, function (err) {
+    els.saveStatus.textContent = '불러오지 못했어요 (' + err.code + ')';
+  });
+
+  setTimeout(function () { els.titleInput.focus(); }, 0);
+}
+
+function teardownEditor() {
+  if (docUnsub) { docUnsub(); docUnsub = null; }
+  currentNoteId = null;
+}
+
+function leaveEditorCleaningUpIfEmpty() {
+  if (!currentNoteId) return;
+  if (!els.titleInput.value.trim() && !els.contentInput.value.trim()) {
+    deleteDoc(noteDoc(currentNoteId)).catch(function () {});
+  }
+}
+
+els.titleInput.addEventListener('input', onEditorInput);
+els.contentInput.addEventListener('input', onEditorInput);
+[els.titleInput, els.contentInput].forEach(function (el) {
+  el.addEventListener('focus', function () { isEditorFocused = true; });
+  el.addEventListener('blur', function () { isEditorFocused = false; });
+});
+
+els.backBtn.addEventListener('click', function () {
+  leaveEditorCleaningUpIfEmpty();
+  goList();
+});
+
+// ---------------- delete confirm modal ----------------
+var pendingDeleteId = null;
+function confirmDelete(id) {
+  pendingDeleteId = id;
+  els.confirmBackdrop.hidden = false;
+  els.confirmCancel.focus();
+}
+function closeConfirm() { pendingDeleteId = null; els.confirmBackdrop.hidden = true; }
+els.confirmCancel.addEventListener('click', closeConfirm);
+els.confirmBackdrop.addEventListener('click', function (e) { if (e.target === els.confirmBackdrop) closeConfirm(); });
+els.confirmOk.addEventListener('click', function () {
+  var id = pendingDeleteId;
+  closeConfirm();
+  if (!id) return;
+  var wasCurrent = id === currentNoteId;
+  deleteDoc(noteDoc(id)).then(function () { if (wasCurrent) goList(); }).catch(function () {});
+});
+els.deleteBtn.addEventListener('click', function () { if (currentNoteId) confirmDelete(currentNoteId); });
+
+// ---------------- boot ----------------
+if (vaultCode) {
+  els.vaultChip.hidden = false;
+  els.vaultChip.textContent = '코드 ' + vaultCode.slice(0, 4) + '…';
+  els.startView.hidden = true;
+  startApp();
+}
+</script>
+</body>
+</html>
