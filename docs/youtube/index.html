@@ -193,6 +193,13 @@
 
   .insights { display: flex; flex-direction: column; gap: 10px; }
   .insight { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; background: var(--surface-2); border-radius: 12px; }
+  .rec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .rec { background: var(--surface-2); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .rec .lv { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 99px; }
+  .rec h3 { margin: 0; font-size: 16px; line-height: 1.35; }
+  .rec ul { margin: 0; padding-left: 18px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+  .rec ul b { color: var(--ink); }
+  .rec .btn { margin-top: auto; }
   .insight .lv { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 99px; flex: none; margin-top: 1px; }
   .insight p { margin: 0; }
   .insight b { font-weight: 700; }
@@ -390,6 +397,7 @@
     <nav class="nav" id="nav">
       <a href="#/home" data-r="home"><span class="ic">🏠</span><span class="lb">홈</span></a>
       <a href="#/analytics" data-r="analytics"><span class="ic">📊</span><span class="lb">분석</span></a>
+      <a href="#/recommend" data-r="recommend"><span class="ic">✨</span><span class="lb">추천</span></a>
       <a href="#/contents" data-r="contents"><span class="ic">🎬</span><span class="lb">콘텐츠</span></a>
       <a href="#/subscribers" data-r="subscribers"><span class="ic">👥</span><span class="lb">구독자</span></a>
       <a href="#/traffic" data-r="traffic"><span class="ic">🔎</span><span class="lb">유입 분석</span></a>
@@ -466,6 +474,7 @@ function normalize(d) {
   d.subscriberHistory = d.subscriberHistory || [];
   d.channelDaily = d.channelDaily || [];
   d.yt = d.yt || null;
+  d.ideas = d.ideas || [];
   d.contents.forEach(c => {
     c.tags = c.tags || []; c.stats = c.stats || []; c.traffic = c.traffic || {};
     c.keywords = c.keywords || []; c.log = c.log || {};
@@ -1253,6 +1262,152 @@ function aggKeywords(R) {
 }
 
 /* =========================================================
+   페이지: 추천 (통계 규칙 기반, AI 미사용)
+   ========================================================= */
+const normKw = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+const squash = s => normKw(s).replace(/\s/g, '');
+// 검색어별로 선택 기간 유입, 이전 기간 유입, 그 검색어로 들어온 영상들을 모은다.
+function keywordStats(R) {
+  const m = new Map();
+  const add = (c, k, ratioCur, ratioPrev) => {
+    const key = normKw(k.keyword); if (!key) return;
+    const o = m.get(key) || { key, label: String(k.keyword).trim(), cur: 0, prev: 0, total: 0, videos: [] };
+    const v = +k.views || 0;
+    o.cur += v * ratioCur; o.prev += v * ratioPrev; o.total += v;
+    o.videos.push({ c, views: v });
+    m.set(key, o);
+  };
+  DB.contents.forEach(c => {
+    const T = total(c).views; if (!T) return;
+    const rc = inRange(c, R.s, R.e).views / T;
+    const rp = R.hasPrev ? inRange(c, R.ps, R.pe).views / T : 0;
+    (c.keywords || []).forEach(k => add(c, k, rc, rp));
+  });
+  return [...m.values()].map(o => {
+    const inTitle = DB.contents.filter(c => squash(c.title).includes(squash(o.key))).length;
+    o.videos.sort((a, b) => b.views - a.views);
+    const fmtViews = {}; o.videos.forEach(x => { fmtViews[x.c.format] = (fmtViews[x.c.format] || 0) + x.views; });
+    const bestFmt = Object.entries(fmtViews).sort((a, b) => b[1] - a[1])[0];
+    const growth = R.hasPrev ? (o.cur + 1) / (o.prev + 1) : 1;
+    return { ...o, inTitle, bestFmt: bestFmt ? bestFmt[0] : '', growth, score: o.cur * (1 / (1 + Math.max(o.videos.length, inTitle))) * Math.min(3, Math.max(0.5, growth)) };
+  }).filter(o => o.cur >= 1 || o.total > 0);
+}
+function comboStats() {
+  const tots = DB.contents.map(c => ({ c, ...total(c) })).filter(x => x.views > 0);
+  const overall = avg(tots, x => x.views);
+  const overallConv = sum(tots, x => x.subs) / (sum(tots, x => x.views) || 1) * 1000;
+  const group = (keyOf) => {
+    const m = new Map();
+    tots.forEach(x => keyOf(x.c).forEach(k => { const a = m.get(k) || []; a.push(x); m.set(k, a); }));
+    return [...m.entries()].filter(([, xs]) => xs.length >= 2).map(([k, xs]) => ({
+      k, n: xs.length, views: avg(xs, x => x.views), conv: sum(xs, x => x.subs) / (sum(xs, x => x.views) || 1) * 1000,
+      rate: sum(xs, x => x.likes) / (sum(xs, x => x.views) || 1) * 100, best: xs.slice().sort((a, b) => b.views - a.views)[0].c,
+    })).sort((a, b) => b.views - a.views);
+  };
+  const formatType = group(c => [`${c.format} · ${c.type || '기타'}`]);
+  const tagPairs = group(c => { const t = c.tags.slice().sort(); const out = []; for (let i = 0; i < t.length; i++) for (let j = i + 1; j < t.length; j++) out.push(`#${t[i]} + #${t[j]}`); return out; });
+  // 업로드 요일: 공정하게 비교하려고 업로드 후 7일 조회수를 쓴다.
+  const W = ['일', '월', '화', '수', '목', '금', '토'];
+  const week = new Map();
+  DB.contents.forEach(c => {
+    const up = dn(c.uploadDate); if (todayN() - up < 7) return;
+    const d = new Date(up * DAY).getUTCDay(); const a = week.get(d) || []; a.push(cumAt(c, 'views', up + 7)); week.set(d, a);
+  });
+  const weekRows = [...week.entries()].filter(([, a]) => a.length >= 2).map(([d, a]) => ({ d: W[d] + '요일', n: a.length, v: avg(a) })).sort((a, b) => b.v - a.v);
+  const hour = new Map();
+  const slot = t => { const h = +String(t || '').slice(0, 2); if (isNaN(h) || !t) return null; return h < 6 ? '새벽(0~6시)' : h < 12 ? '오전(6~12시)' : h < 18 ? '오후(12~18시)' : '저녁(18~24시)'; };
+  DB.contents.forEach(c => { const up = dn(c.uploadDate); const s = slot(c.uploadTime); if (!s || todayN() - up < 7) return; const a = hour.get(s) || []; a.push(cumAt(c, 'views', up + 7)); hour.set(s, a); });
+  const hourRows = [...hour.entries()].filter(([, a]) => a.length >= 2).map(([k, a]) => ({ k, n: a.length, v: avg(a) })).sort((a, b) => b.v - a.v);
+  return { overall, overallConv, formatType, tagPairs, weekRows, hourRows };
+}
+function buildRecs(R) {
+  const kws = keywordStats(R).sort((a, b) => b.score - a.score);
+  const cs = comboStats();
+  const recs = [];
+  const bestFT = cs.formatType[0];
+  kws.slice(0, 4).forEach(k => {
+    if (k.cur < 1) return;
+    const why = [`${esc(R.key === 'all' || period.key === 'all' ? '전체 기간' : R.label)} 동안 <b>"${esc(k.label)}"</b> 검색으로 약 <b>${fmt(k.cur)}회</b> 들어왔어요${R.hasPrev && k.prev ? ` (이전 기간 ${fmt(k.prev)}회${k.growth >= 1.2 ? `, <b>${((k.growth - 1) * 100).toFixed(0)}% ↑</b>` : ''})` : ''}.`];
+    const n = Math.max(k.videos.length, k.inTitle);
+    why.push(n <= 1 ? `그런데 이 검색어로 찾을 수 있는 영상이 <b>${n}개뿐</b>이에요. 후속 영상이 있으면 검색 유입을 더 받을 수 있어요.` : `관련 영상은 ${n}개 있어요. 가장 많이 받은 건 "${esc(k.videos[0].c.title)}".`);
+    if (k.inTitle === 0) why.push(`아직 제목에 "${esc(k.label)}"이(가) 들어간 영상이 없어요. 제목에 검색어를 그대로 넣어 보세요.`);
+    const f = k.bestFmt || (bestFT ? bestFT.k.split(' · ')[0] : '');
+    if (f) why.push(`이 검색어는 <b>${esc(f)}</b> 영상에서 반응이 가장 컸어요.`);
+    recs.push({ kind: '검색어 기회', title: `"${esc(k.label)}" 주제로 ${esc(f || '새 영상')} 한 편 더`, why, idea: `"${k.label}" 주제 ${f || ''} (검색 유입 ${fmt(k.cur)}회, 관련 영상 ${n}개)`.trim() });
+  });
+  if (bestFT && cs.overall && bestFT.views > cs.overall * 1.1) {
+    recs.push({ kind: '잘 되는 조합', title: `${esc(bestFT.k)} 포맷을 이어가기`, why: [`${esc(bestFT.k)} 콘텐츠 ${bestFT.n}개의 평균 조회수가 <b>${fmt(bestFT.views)}</b>로 채널 평균(${fmt(cs.overall)})보다 <b>${((bestFT.views / cs.overall - 1) * 100).toFixed(0)}% 높아요</b>.`, `대표 영상: "${esc(bestFT.best.title)}"`], idea: `${bestFT.k} 포맷으로 새 영상 (평균 조회수 ${fmt(bestFT.views)})` });
+  }
+  const convBest = cs.formatType.slice().sort((a, b) => b.conv - a.conv)[0];
+  if (convBest && convBest !== bestFT && convBest.conv > cs.overallConv * 1.2) {
+    recs.push({ kind: '구독 전환', title: `구독자를 늘리려면 ${esc(convBest.k)}`, why: [`조회수 1,000회당 <b>${convBest.conv.toFixed(1)}명</b>이 구독했어요 (채널 평균 ${cs.overallConv.toFixed(1)}명). 조회수보다 구독자를 늘리고 싶을 때 좋은 포맷이에요.`], idea: `${convBest.k} (구독 전환 1천회당 ${convBest.conv.toFixed(1)}명)` });
+  }
+  const tp = cs.tagPairs[0];
+  if (tp && cs.overall && tp.views > cs.overall * 1.1) {
+    recs.push({ kind: '소재 조합', title: `${esc(tp.k)} 조합 다시 테스트`, why: [`두 소재를 함께 쓴 영상 ${tp.n}개의 평균 조회수가 <b>${fmt(tp.views)}</b>로 채널 평균보다 <b>${((tp.views / cs.overall - 1) * 100).toFixed(0)}% 높아요</b>.`], idea: `${tp.k} 조합 콘텐츠` });
+  }
+  return { recs, kws, cs };
+}
+function pageRecommend() {
+  const R = range();
+  const { recs, kws, cs } = buildRecs(R);
+  const rising = kws.filter(k => R.hasPrev && k.cur >= 20 && k.growth >= 1.3).sort((a, b) => b.growth - a.growth).slice(0, 5);
+  const ideas = (DB.ideas || []).slice().sort((a, b) => b.createdAt - a.createdAt);
+  const logIdeas = DB.contents.filter(c => c.log && c.log.nextIdea);
+  const enough = DB.contents.length >= 3;
+  return `
+  <div class="topbar"><div class="grow"><h1>✨ 추천</h1><p>사람들이 어떤 검색어로 들어왔는지 보고 다음 콘텐츠 방향을 골라 봐요.</p></div><div class="top-actions">${addBtn()}</div></div>
+  ${sampleBanner()}
+  <div class="filters" style="margin-bottom:16px">${periodControls()}<span class="muted small">검색어 유입은 선택 기간 기준 · 포맷/조합은 누적 기준 · 통계 규칙으로 추천해요</span></div>
+  ${!enough ? `<div class="card empty" style="margin-bottom:16px"><b>콘텐츠가 3개 이상 쌓이면 추천이 정확해져요</b>지금은 참고용으로만 봐 주세요.</div>` : ''}
+  <div class="card" style="margin-bottom:16px"><div class="card-h"><h2>다음 콘텐츠 추천</h2><span class="sub">${recs.length}개</span></div>
+    ${recs.length ? `<div class="rec-grid">${recs.map((r, i) => `<div class="rec"><span class="lv">${esc(r.kind)}</span><h3>${r.title}</h3><ul>${r.why.map(w => `<li>${w}</li>`).join('')}</ul>
+      <button class="btn sm" data-act="save-idea" data-idea="${esc(r.idea)}">💾 아이디어에 담기</button></div>`).join('')}</div>`
+      : `<div class="empty small">검색어·태그 데이터가 쌓이면 추천을 보여드릴게요. YouTube를 연결하면 검색어가 자동으로 들어와요.</div>`}
+  </div>
+  <div class="grid g-11">
+    <div class="card"><div class="card-h"><h2>🔎 검색어별 기회</h2><span class="sub">유입은 많은데 영상이 적은 순</span></div>
+      ${kws.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>검색어</th><th class="num">기간 유입</th>${R.hasPrev ? '<th class="num">변화</th>' : ''}<th class="num">관련 영상</th><th>잘 된 형식</th></tr></thead><tbody>
+        ${kws.slice(0, 12).map(k => `<tr class="link" data-kw="${esc(k.videos[0] ? String((k.videos[0].c.keywords.find(x => normKw(x.keyword) === k.key) || {}).keyword || k.label) : k.label)}"><td><b>${esc(k.label)}</b></td><td class="num">${fmt(k.cur)}</td>
+          ${R.hasPrev ? `<td class="num">${k.prev ? `<span style="color:${k.growth >= 1 ? 'var(--up)' : 'var(--down)'}">${k.growth >= 1 ? '↑' : '↓'} ${Math.abs((k.growth - 1) * 100).toFixed(0)}%</span>` : '<span class="muted">new</span>'}</td>` : ''}
+          <td class="num">${Math.max(k.videos.length, k.inTitle)}개</td><td>${esc(k.bestFmt)}</td></tr>`).join('')}
+      </tbody></table></div>` : `<div class="empty small">아직 검색어 데이터가 없어요</div>`}</div>
+    <div class="card"><div class="card-h"><h2>📈 요즘 늘어나는 검색어</h2><span class="sub">이전 기간보다 30% 이상 증가</span></div>
+      ${rising.length ? barsHTML(rising.map(k => ({ label: k.label, value: k.cur, more: [{ label: '이전 기간', value: fmt(k.prev) }, { label: '증가', value: '+' + ((k.growth - 1) * 100).toFixed(0) + '%' }] })), 'var(--views)', fmt, '기간 유입') : `<div class="empty small">${R.hasPrev ? '눈에 띄게 늘어난 검색어가 아직 없어요' : '"전체" 기간에서는 비교할 이전 기간이 없어요'}</div>`}
+    </div>
+  </div>
+  <div class="grid g-111">
+    <div class="card"><div class="card-h"><h2>잘 되는 형식 · 유형</h2><span class="sub">2개 이상, 평균 조회수</span></div>
+      ${barsHTML(cs.formatType.slice(0, 6).map(r => ({ label: r.k, value: r.views, more: [{ label: '콘텐츠', value: r.n + '개' }, { label: '1천회당 구독', value: r.conv.toFixed(1) + '명' }] })), 'var(--comments)', fmt, '평균 조회수')}</div>
+    <div class="card"><div class="card-h"><h2>잘 되는 소재 조합</h2><span class="sub">태그 2개 조합</span></div>
+      ${barsHTML(cs.tagPairs.slice(0, 6).map(r => ({ label: r.k, value: r.views, more: [{ label: '콘텐츠', value: r.n + '개' }] })), 'var(--likes)', fmt, '평균 조회수')}</div>
+    <div class="card"><div class="card-h"><h2>업로드 타이밍</h2><span class="sub">업로드 후 7일 평균 조회수</span></div>
+      ${cs.weekRows.length || cs.hourRows.length ? `${barsHTML(cs.weekRows.map(r => ({ label: r.d, value: r.v, more: [{ label: '콘텐츠', value: r.n + '개' }] })), 'var(--subs)', fmt, '7일 조회수')}
+        ${cs.hourRows.length ? `<div style="height:14px"></div>${barsHTML(cs.hourRows.map(r => ({ label: r.k, value: r.v, more: [{ label: '콘텐츠', value: r.n + '개' }] })), 'var(--subs)', fmt, '7일 조회수')}` : ''}` : `<div class="empty small">같은 요일/시간대에 2개 이상 올리면 비교해 드려요</div>`}</div>
+  </div>
+  <div class="card"><div class="card-h"><h2>💭 아이디어 보관함</h2><span class="sub">추천에서 담은 것 + 회고에 적은 "다음 아이디어"</span></div>
+    <form id="ideaForm" class="filters" style="margin-bottom:12px"><input class="inp" id="ideaIn" placeholder="떠오른 아이디어를 적어 두세요" style="flex:1;min-width:220px" aria-label="아이디어"><button class="btn primary" type="submit">담기</button></form>
+    ${ideas.length || logIdeas.length ? `<div class="insights">
+      ${ideas.map(it => `<div class="insight"><span class="lv">${it.done ? '완료' : '아이디어'}</span><p style="flex:1;${it.done ? 'text-decoration:line-through;color:var(--ink-3)' : ''}">${esc(it.text)}<br><span class="muted small">${ymd(Math.floor(it.createdAt / DAY))} 담음</span></p>
+        <button class="btn ghost sm" data-act="idea-done" data-id="${esc(it.id)}">${it.done ? '되돌리기' : '✓ 만들었어요'}</button><button class="btn ghost sm danger" data-act="idea-del" data-id="${esc(it.id)}" aria-label="삭제">✕</button></div>`).join('')}
+      ${logIdeas.map(c => `<div class="insight"><span class="lv">회고</span><p>${esc(c.log.nextIdea)}<br><a class="muted small" href="#/content/${esc(c.id)}">← ${esc(c.title)}</a></p></div>`).join('')}
+    </div>` : `<div class="empty small">아직 담은 아이디어가 없어요</div>`}
+  </div>`;
+}
+function afterRecommend() {
+  bindPeriod();
+  $('#ideaForm').addEventListener('submit', e => {
+    e.preventDefault(); const v = $('#ideaIn').value.trim(); if (!v) return;
+    addIdea(v); toast('아이디어를 담았어요'); render();
+  });
+}
+function addIdea(text) {
+  DB.ideas = DB.ideas || [];
+  if (DB.ideas.some(i => i.text === text)) return false;
+  DB.ideas.push({ id: uid(), text, createdAt: Date.now(), done: false }); save(); return true;
+}
+
+/* =========================================================
    페이지: 분석
    ========================================================= */
 function pageAnalytics() {
@@ -1865,6 +2020,12 @@ document.addEventListener('click', e => {
     if (!DB.contents.length || confirm('지금 데이터를 예시 데이터로 바꿀까요? (먼저 백업을 권해요)')) { DB = makeSample(); _pc.clear(); save(); render(); }
   } else if (a === 'reset') {
     if (confirm('정말 모든 데이터를 삭제할까요? 되돌릴 수 없어요.')) { DB = { isSample: false, channel: { name: '그냥 은지', owner: '은지', url: '' }, subscriberHistory: [], contents: [] }; _pc.clear(); save(); render(); }
+  } else if (a === 'save-idea') {
+    toast(addIdea(act.dataset.idea) ? '아이디어 보관함에 담았어요' : '이미 담긴 아이디어예요'); render();
+  } else if (a === 'idea-done') {
+    const it = (DB.ideas || []).find(i => i.id === act.dataset.id); if (it) { it.done = !it.done; save(); render(); }
+  } else if (a === 'idea-del') {
+    DB.ideas = (DB.ideas || []).filter(i => i.id !== act.dataset.id); save(); render();
   } else if (a === 'sync') {
     runSync();
   } else if (a === 'yt-off') {
@@ -1907,6 +2068,7 @@ function render() {
   hideTip();
   switch (r.name) {
     case 'analytics': main.innerHTML = pageAnalytics(); afterAnalytics(); break;
+    case 'recommend': main.innerHTML = pageRecommend(); afterRecommend(); break;
     case 'contents': main.innerHTML = pageContents(r.q); afterContents(); break;
     case 'content': main.innerHTML = pageDetail(r.arg); afterDetail(r.arg); break;
     case 'subscribers': main.innerHTML = pageSubscribers(); afterSubscribers(); break;
