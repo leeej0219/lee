@@ -718,7 +718,7 @@ const tokenValid = () => !!(ytToken && ytToken.exp > Date.now() + 60000 && Strin
 const isDirty = () => { try { return localStorage.getItem(KEY + ':dirty') === '1'; } catch (e) { return false; } };
 const setDirty = v => { try { localStorage.setItem(KEY + ':dirty', v ? '1' : '0'); } catch (e) {} };
 async function driveFetch(url, opt = {}) {
-  const r = await fetch(url, Object.assign({}, opt, { headers: Object.assign({ Authorization: 'Bearer ' + ytToken.access_token }, opt.headers || {}) }));
+  const r = await fetch(url, Object.assign({ cache: 'no-store' }, opt, { headers: Object.assign({ Authorization: 'Bearer ' + ytToken.access_token }, opt.headers || {}) }));
   if (r.ok) return r;
   const j = await r.json().catch(() => ({}));
   const er = j.error || {};
