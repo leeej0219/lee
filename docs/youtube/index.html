@@ -404,7 +404,7 @@
       <a href="#/log" data-r="log"><span class="ic">📝</span><span class="lb">콘텐츠 로그</span></a>
       <a href="#/settings" data-r="settings"><span class="ic">⚙️</span><span class="lb">설정</span></a>
     </nav>
-    <div class="side-foot">데이터는 이 브라우저에 저장돼요.<br>설정에서 백업할 수 있어요.</div>
+    <div class="side-foot">YouTube를 연결하면 구글 드라이브로<br>휴대폰·컴퓨터가 동기화돼요.</div>
   </div></aside>
   <main class="main" id="main"></main>
 </div>
@@ -481,17 +481,18 @@ function normalize(d) {
   });
   return d;
 }
-function save() {
+function saveLocal() {
   try { localStorage.setItem(KEY, JSON.stringify(DB)); }
   catch (e) { console.error(e); toast('저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.'); }
 }
+function save() { DB.updatedAt = Date.now(); saveLocal(); if (typeof scheduleCloudPush === 'function') scheduleCloudPush(); }
 
 /* =========================================================
    YouTube 연동 (브라우저에서 구글 로그인 → Data API + Analytics API)
    서버·비밀키 없이 동작. 클라이언트 ID는 공개돼도 되는 값.
    ========================================================= */
 const DEFAULT_CLIENT_ID = '862190990167-sa7okm4f93cl0bu5pknd2iko8u9efumi.apps.googleusercontent.com';
-const YT_SCOPES = ['https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/yt-analytics.readonly'];
+const YT_SCOPES = ['https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/yt-analytics.readonly', 'https://www.googleapis.com/auth/drive.appdata'];
 const DATA_API = 'https://www.googleapis.com/youtube/v3/';
 const ANALYTICS_API = 'https://youtubeanalytics.googleapis.com/v2/reports';
 const SOURCE_MAP = {
@@ -501,7 +502,7 @@ const SOURCE_MAP = {
 const mapSource = t => SOURCE_MAP[t] || '기타';
 const clientId = () => { try { return localStorage.getItem(KEY + ':clientId') || DEFAULT_CLIENT_ID; } catch (e) { return DEFAULT_CLIENT_ID; } };
 let ytToken = null;
-try { ytToken = JSON.parse(sessionStorage.getItem(KEY + ':tok') || 'null'); } catch (e) {}
+try { ytToken = JSON.parse(localStorage.getItem(KEY + ':tok') || 'null'); } catch (e) {}
 
 let gisPromise = null;
 function loadGIS() {
@@ -516,7 +517,7 @@ function loadGIS() {
 }
 // 팝업 차단을 피하려면 클릭 직후 동기적으로 requestAccessToken을 불러야 해서, 스크립트는 미리 불러 둔다.
 function getToken() {
-  if (ytToken && ytToken.exp > Date.now() + 60000) return Promise.resolve(ytToken.access_token);
+  if (ytToken && ytToken.exp > Date.now() + 60000 && YT_SCOPES.every(sc => String(ytToken.scope || '').includes(sc))) return Promise.resolve(ytToken.access_token);
   const cid = clientId();
   if (!cid) return Promise.reject(new Error('먼저 설정에서 구글 클라이언트 ID를 입력해 주세요.'));
   const ask = () => new Promise((res, rej) => {
@@ -524,9 +525,9 @@ function getToken() {
       client_id: cid, scope: YT_SCOPES.join(' '), prompt: DB.yt ? '' : 'consent',
       callback: r => {
         if (r.error) return rej(new Error('구글 로그인 실패: ' + (r.error_description || r.error)));
-        if (!google.accounts.oauth2.hasGrantedAllScopes(r, ...YT_SCOPES)) return rej(new Error('YouTube 데이터 보기 권한 두 가지를 모두 허용해야 해요.'));
-        ytToken = { access_token: r.access_token, exp: Date.now() + (+r.expires_in || 3600) * 1000 };
-        try { sessionStorage.setItem(KEY + ':tok', JSON.stringify(ytToken)); } catch (e) {}
+        if (!google.accounts.oauth2.hasGrantedAllScopes(r, ...YT_SCOPES)) return rej(new Error('권한 화면에서 "모두 선택"으로 세 가지(YouTube 보기, YouTube 분석, 드라이브 앱 데이터)를 모두 허용해야 해요.'));
+        ytToken = { access_token: r.access_token, scope: r.scope || YT_SCOPES.join(' '), exp: Date.now() + (+r.expires_in || 3600) * 1000 };
+        try { localStorage.setItem(KEY + ':tok', JSON.stringify(ytToken)); } catch (e) {}
         res(ytToken.access_token);
       },
       error_callback: e => rej(new Error(e && e.type === 'popup_closed' ? '로그인 창이 닫혔어요.' : e && e.type === 'popup_failed_to_open' ? '팝업이 차단됐어요. 브라우저에서 팝업을 허용한 뒤 다시 눌러 주세요.' : '구글 로그인 오류: ' + ((e && (e.message || e.type)) || ''))),
@@ -544,7 +545,7 @@ async function ytApi(url, params) {
     const j = await r.json().catch(() => ({}));
     if (r.ok) return j;
     if ((r.status === 429 || r.status >= 500) && attempt < 3) { await new Promise(ok => setTimeout(ok, 800 * 2 ** attempt)); continue; }
-    if (r.status === 401) { ytToken = null; try { sessionStorage.removeItem(KEY + ':tok'); } catch (e) {} }
+    if (r.status === 401) { ytToken = null; try { localStorage.removeItem(KEY + ':tok'); } catch (e) {} }
     const er = j.error || {};
     const reason = (er.errors && er.errors[0] && er.errors[0].reason) || er.status || '';
     const err = new Error(er.message || ('HTTP ' + r.status)); err.status = r.status; err.reason = reason; err.api = url;
@@ -660,6 +661,8 @@ async function syncYouTube(progress) {
     videoCount: pub.length, dataUntil: DB.channelDaily.length ? DB.channelDaily[DB.channelDaily.length - 1].date : '',
   };
   if (!DB.channel.url) DB.channel.url = 'https://www.youtube.com/' + (ch.snippet.customUrl || 'channel/' + ch.id);
+  const now = Date.now();
+  DB.contents.forEach(c => { if (c.ytId) c.syncedAt = now; });
   _pc.clear(); DB.contents.forEach(bust);
   save();
 }
@@ -673,10 +676,20 @@ async function runSync() {
   $('#modalRoot').innerHTML = `<div class="modal-bg" id="mbg"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="syT" style="width:min(460px,100%)">
     <div class="modal-h"><h2 id="syT">YouTube 데이터 가져오는 중</h2></div>
     <div class="modal-b"><p id="syP" style="margin:0 0 6px">구글 로그인 창에서 채널 계정을 선택해 주세요…</p><p class="muted small" style="margin:0">영상 수에 따라 1분 정도 걸릴 수 있어요.</p></div></div></div>`;
-  const syncing = syncYouTube(t => { const p = $('#syP'); if (p) p.textContent = t; });
+  const prog = t => { const p = $('#syP'); if (p) p.textContent = t; };
+  const syncing = (async () => {
+    await getToken();
+    let cloudErr = null;
+    prog('드라이브에서 다른 기기 기록 불러오는 중…');
+    try { await cloudPullMerge(); } catch (e) { console.error(e); cloudErr = e; }
+    await syncYouTube(prog);
+    if (!cloudErr) { prog('드라이브에 저장 중…'); clearTimeout(cloudPushT); try { await cloudPush(); } catch (e) { console.error(e); cloudErr = e; } }
+    return cloudErr;
+  })();
   try {
-    await syncing;
-    closeModal(); toast('YouTube 데이터를 불러왔어요'); render();
+    const cloudErr = await syncing;
+    cloudState.error = cloudErr ? cloudErrorText(cloudErr) : '';
+    closeModal(); toast(cloudErr ? 'YouTube는 불러왔지만 드라이브 동기화는 실패했어요' : 'YouTube 데이터와 기기 동기화를 마쳤어요'); render();
   } catch (e) {
     console.error(e);
     $('#modalRoot').innerHTML = `<div class="modal-bg" id="mbg"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="syE" style="width:min(520px,100%)">
@@ -689,7 +702,131 @@ const agoText = t => { const m = Math.round((Date.now() - t) / 60000); return m 
 function ytStatus() {
   if (!DB.yt) return '';
   return `<span class="muted small">▶ YouTube 동기화 ${agoText(DB.yt.lastSync)}${DB.yt.dataUntil ? ` · 분석 데이터 ${esc(DB.yt.dataUntil.slice(5).replace('-', '/'))}까지` : ''}</span>
-    <button class="btn sm" data-act="sync">↻ 새로고침</button>`;
+    <button class="btn sm" data-act="sync">↻ 새로고침</button><span class="cloud-badge">${cloudBadgeHTML()}</span>`;
+}
+
+/* =========================================================
+   기기 간 동기화: 구글 드라이브의 앱 전용 숨김 폴더(appDataFolder)에
+   대시보드 데이터를 통째로 저장한다. 같은 구글 로그인을 쓴다.
+   ========================================================= */
+const DRIVE = 'https://www.googleapis.com/drive/v3/files';
+const DRIVE_UP = 'https://www.googleapis.com/upload/drive/v3/files';
+const CLOUD_NAME = 'justeunji-dashboard.json';
+let cloudFileId = null, cloudPushT = null;
+let cloudState = { busy: false, error: '' };
+const tokenValid = () => !!(ytToken && ytToken.exp > Date.now() + 60000 && String(ytToken.scope || '').includes('drive.appdata'));
+const isDirty = () => { try { return localStorage.getItem(KEY + ':dirty') === '1'; } catch (e) { return false; } };
+const setDirty = v => { try { localStorage.setItem(KEY + ':dirty', v ? '1' : '0'); } catch (e) {} };
+async function driveFetch(url, opt = {}) {
+  const r = await fetch(url, Object.assign({}, opt, { headers: Object.assign({ Authorization: 'Bearer ' + ytToken.access_token }, opt.headers || {}) }));
+  if (r.ok) return r;
+  const j = await r.json().catch(() => ({}));
+  const er = j.error || {};
+  const err = new Error(er.message || 'HTTP ' + r.status);
+  err.status = r.status; err.reason = (er.errors && er.errors[0] && er.errors[0].reason) || er.status || '';
+  if (r.status === 401) { ytToken = null; try { localStorage.removeItem(KEY + ':tok'); } catch (e) {} }
+  throw err;
+}
+async function driveFind() {
+  if (cloudFileId) return cloudFileId;
+  const u = new URL(DRIVE);
+  u.searchParams.set('spaces', 'appDataFolder'); u.searchParams.set('q', `name='${CLOUD_NAME}'`);
+  u.searchParams.set('fields', 'files(id,modifiedTime)'); u.searchParams.set('orderBy', 'modifiedTime desc');
+  const j = await (await driveFetch(u)).json();
+  cloudFileId = j.files && j.files[0] ? j.files[0].id : null;
+  return cloudFileId;
+}
+const cloudJSON = () => JSON.stringify(DB, (k, v) => k === '_v' ? undefined : v);
+async function cloudPush() {
+  const id = await driveFind();
+  if (id) {
+    await driveFetch(`${DRIVE_UP}/${id}?uploadType=media`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: cloudJSON() });
+  } else {
+    const b = 'justeunji' + Date.now();
+    const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: CLOUD_NAME, parents: ['appDataFolder'] })}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${cloudJSON()}\r\n--${b}--`;
+    const j = await (await driveFetch(`${DRIVE_UP}?uploadType=multipart&fields=id`, { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + b }, body })).json();
+    cloudFileId = j.id;
+  }
+  setDirty(false); DB.cloudAt = Date.now(); saveLocal();
+}
+async function cloudPull() {
+  const id = await driveFind(); if (!id) return null;
+  return (await driveFetch(`${DRIVE}/${id}?alt=media`)).json();
+}
+// 두 기기의 데이터를 합친다: 직접 쓴 내용은 더 나중에 고친 쪽, YouTube 숫자는 더 나중에 새로고침한 쪽.
+function mergeDB(L, Rm) {
+  if (!Rm) return L;
+  if (L.isSample && !Rm.isSample) return Rm;
+  if (Rm.isSample && !L.isSample) return L;
+  const newer = (L.updatedAt || 0) >= (Rm.updatedAt || 0) ? L : Rm;
+  const ytNewer = ((L.yt && L.yt.lastSync) || 0) >= ((Rm.yt && Rm.yt.lastSync) || 0) ? L : Rm;
+  const out = Object.assign({}, newer, { yt: ytNewer.yt, channelDaily: ytNewer.channelDaily || [], subscriberHistory: ytNewer.subscriberHistory || [] });
+  const deleted = new Set([...(L.deleted || []), ...(Rm.deleted || [])]);
+  out.deleted = [...deleted];
+  const keyOf = c => c.ytId || c.id;
+  const USER = ['type', 'tags', 'log', 'series', 'formatLocked', 'editedAt'];
+  const map = new Map();
+  [...L.contents, ...Rm.contents].forEach(c => {
+    if (deleted.has(c.id)) return;
+    const k = keyOf(c), x = map.get(k);
+    if (!x) { map.set(k, c); return; }
+    const user = (x.editedAt || 0) >= (c.editedAt || 0) ? x : c;
+    if (!c.ytId && !x.ytId) { map.set(k, user); return; }
+    const data = (x.syncedAt || 0) >= (c.syncedAt || 0) ? x : c;
+    const m = Object.assign({}, data, { id: user.id });
+    USER.forEach(f => { if (f in user) m[f] = user[f]; });
+    if (user.formatLocked) m.format = user.format;
+    map.set(k, m);
+  });
+  out.contents = [...map.values()];
+  const ideas = new Map();
+  [...(L.ideas || []), ...(Rm.ideas || [])].forEach(i => { const x = ideas.get(i.id); if (!x || (i.updatedAt || i.createdAt) > (x.updatedAt || x.createdAt)) ideas.set(i.id, i); });
+  out.ideas = [...ideas.values()];
+  out.isSample = false;
+  return normalize(out);
+}
+async function cloudPullMerge() {
+  const remote = await cloudPull();
+  if (remote && Array.isArray(remote.contents)) {
+    DB = mergeDB(DB, normalize(remote)); _pc.clear(); saveLocal();
+  }
+}
+function scheduleCloudPush() {
+  setDirty(true);
+  clearTimeout(cloudPushT);
+  if (!tokenValid() || DB.isSample) { updateCloudBadge(); return; }
+  cloudPushT = setTimeout(async () => {
+    cloudState.busy = true; updateCloudBadge();
+    try { await cloudPush(); cloudState.error = ''; } catch (e) { console.error(e); cloudState.error = cloudErrorText(e); }
+    cloudState.busy = false; updateCloudBadge();
+  }, 1200);
+  updateCloudBadge();
+}
+function cloudErrorText(e) {
+  if (e && (e.reason === 'accessNotConfigured' || /has not been used|is disabled/i.test(e.message))) return 'Google Cloud에서 "Google Drive API"를 사용으로 켜 주세요.';
+  if (e && e.status === 403) return '드라이브 저장 권한이 없어요. 새로고침을 눌러 권한 화면에서 모두 허용해 주세요.';
+  return '드라이브 동기화 실패: ' + (e && e.message || e);
+}
+function cloudBadgeHTML() {
+  if (!DB.yt) return '';
+  if (cloudState.busy) return '<span class="muted small">☁️ 드라이브에 저장 중…</span>';
+  if (cloudState.error) return `<span class="small" style="color:var(--danger)">☁️ ${esc(cloudState.error)}</span>`;
+  if (isDirty()) return `<span class="small" style="color:var(--danger)">☁️ 이 기기에만 저장된 변경이 있어요 — 새로고침을 누르면 다른 기기에도 반영돼요</span>`;
+  return DB.cloudAt ? `<span class="muted small">☁️ 드라이브 동기화됨 ${agoText(DB.cloudAt)}</span>` : '';
+}
+function updateCloudBadge() { $$('.cloud-badge').forEach(el => { el.innerHTML = cloudBadgeHTML(); }); }
+// 앱을 열거나 다시 볼 때, 로그인이 살아 있으면 조용히 최신 기록을 받아온다.
+async function cloudAutoPull() {
+  if (!tokenValid() || !DB.yt || cloudState.busy) return;
+  cloudState.busy = true; updateCloudBadge();
+  try {
+    const before = JSON.stringify(DB.updatedAt) + (DB.contents.length);
+    await cloudPullMerge();
+    if (isDirty()) await cloudPush();
+    cloudState.error = '';
+    if (before !== JSON.stringify(DB.updatedAt) + (DB.contents.length)) { cloudState.busy = false; render(); return; }
+  } catch (e) { console.error(e); cloudState.error = cloudErrorText(e); }
+  cloudState.busy = false; updateCloudBadge();
 }
 
 /* ---------- 샘플 데이터 (오늘 날짜 기준으로 생성) ---------- */
@@ -1352,7 +1489,7 @@ function pageRecommend() {
   const R = range();
   const { recs, kws, cs } = buildRecs(R);
   const rising = kws.filter(k => R.hasPrev && k.cur >= 20 && k.growth >= 1.3).sort((a, b) => b.growth - a.growth).slice(0, 5);
-  const ideas = (DB.ideas || []).slice().sort((a, b) => b.createdAt - a.createdAt);
+  const ideas = (DB.ideas || []).filter(i => !i.deleted).slice().sort((a, b) => b.createdAt - a.createdAt);
   const logIdeas = DB.contents.filter(c => c.log && c.log.nextIdea);
   const enough = DB.contents.length >= 3;
   return `
@@ -1403,7 +1540,7 @@ function afterRecommend() {
 }
 function addIdea(text) {
   DB.ideas = DB.ideas || [];
-  if (DB.ideas.some(i => i.text === text)) return false;
+  if (DB.ideas.some(i => i.text === text && !i.deleted)) return false;
   DB.ideas.push({ id: uid(), text, createdAt: Date.now(), done: false }); save(); return true;
 }
 
@@ -1743,7 +1880,7 @@ function pageSettings() {
   <div class="card" id="yt" style="margin-bottom:16px"><div class="card-h"><h2>▶ YouTube 채널 연결</h2>${DB.yt ? `<span class="badge long">연결됨</span>` : ''}</div>
     ${DB.yt ? `<p style="margin-top:0"><b>${esc(DB.yt.title)}</b> ${DB.yt.handle ? `<span class="muted">${esc(DB.yt.handle)}</span>` : ''} · 영상 ${fmt(DB.yt.videoCount)}개 · 누적 조회수 ${fmt(DB.yt.totalViews)}</p>
       <div class="filters" style="margin-bottom:14px">${ytStatus()}</div>
-      <p class="muted small">새로고침을 누르면 구글 로그인 창이 잠깐 떴다가 닫힐 수 있어요(로그인은 1시간 유지). 직접 쓴 유형·태그·회고는 새로고침해도 그대로 남아요.</p>` :
+      <p class="muted small">새로고침을 누르면 구글 로그인 창이 잠깐 떴다가 닫힐 수 있어요(로그인은 1시간 유지). 직접 쓴 유형·태그·회고·아이디어는 은지님 구글 드라이브의 앱 전용 숨김 폴더에 저장돼서, 휴대폰과 컴퓨터에서 새로고침하면 같은 내용이 보여요.</p>` :
       `<p style="margin-top:0">구글 로그인으로 <b>그냥 은지</b> 채널의 실제 분석(조회수·좋아요·댓글·구독/구독 취소·시청시간·유입 경로·검색어)을 불러와요. 데이터는 이 브라우저에만 저장되고 다른 곳으로 보내지 않아요.</p>`}
     <form id="cidForm" class="filters" style="margin-bottom:12px">
       <input class="inp" id="cidIn" value="${esc(clientId())}" placeholder="구글 OAuth 클라이언트 ID (….apps.googleusercontent.com)" style="flex:1;min-width:240px" aria-label="클라이언트 ID">
@@ -1754,7 +1891,7 @@ function pageSettings() {
     <details class="more" ${clientId() ? '' : 'open'}><summary>처음 한 번만: 클라이언트 ID 만드는 방법 (5분)</summary>
       <ol style="margin:0;padding-left:20px;line-height:1.8">
         <li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud 콘솔</a>에서 새 프로젝트를 만들어요 (이름 예: justeunzi-dashboard).</li>
-        <li><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">YouTube Data API v3</a>와 <a href="https://console.cloud.google.com/apis/library/youtubeanalytics.googleapis.com" target="_blank" rel="noopener">YouTube Analytics API</a>를 각각 열어 <b>사용</b>을 눌러요.</li>
+        <li><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">YouTube Data API v3</a>와 <a href="https://console.cloud.google.com/apis/library/youtubeanalytics.googleapis.com" target="_blank" rel="noopener">YouTube Analytics API</a>, <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener">Google Drive API</a>(기기 간 동기화용)를 각각 열어 <b>사용</b>을 눌러요.</li>
         <li><a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener">Google 인증 플랫폼(OAuth 동의 화면)</a>에서 시작하기 → 앱 이름 아무거나, 대상은 <b>외부</b>로 만들어요.</li>
         <li>같은 메뉴의 <b>대상</b> → <b>테스트 사용자</b>에 채널을 관리하는 구글 계정 이메일을 추가해요.</li>
         <li><b>클라이언트</b> → 클라이언트 만들기 → 유형 <b>웹 애플리케이션</b> → 승인된 자바스크립트 원본에 <code>${esc(location.origin.startsWith('http') ? location.origin : 'https://leeej0219.github.io')}</code> 추가 → 만들기.</li>
@@ -1773,7 +1910,7 @@ function pageSettings() {
         <button class="btn primary" type="submit">저장</button>
       </form></div>
     <div class="card"><div class="card-h"><h2>데이터 백업</h2></div>
-      <p class="muted" style="margin-top:0">데이터는 지금 이 브라우저(기기)에만 저장돼요. 브라우저 데이터를 지우면 사라지니 가끔 백업 파일을 내려받아 두세요. 다른 기기로 옮길 때도 백업 파일을 불러오면 돼요.</p>
+      <p class="muted" style="margin-top:0">${DB.yt ? '직접 쓴 기록은 구글 드라이브에도 저장돼서 기기 간에 자동으로 맞춰져요. 만일을 위해 가끔 백업 파일을 내려받아 두면 더 안전해요.' : '지금은 이 브라우저(기기)에만 저장돼요. YouTube를 연결하면 구글 드라이브로 기기 간 동기화돼요. 그 전까지는 백업 파일로 옮길 수 있어요.'}</p>
       <div class="top-actions" style="margin-bottom:18px">
         <button class="btn" data-act="export">⬇ 백업 파일 내려받기</button>
         <label class="btn" style="cursor:pointer">⬆ 백업 파일 불러오기<input type="file" id="importF" accept="application/json,.json" hidden></label>
@@ -1923,6 +2060,7 @@ function saveWizard() {
   let c = wiz.id ? DB.contents.find(x => x.id === wiz.id) : null;
   if (!c) { c = { id: uid(), stats: [], createdAt: Date.now() }; DB.contents.push(c); }
   if (c.ytId && f.format !== c.format) c.formatLocked = true;
+  c.editedAt = Date.now();
   Object.assign(c, { title: f.title.trim(), url: f.url.trim(), thumbnail: f.thumbnail.trim(), uploadDate: f.uploadDate, uploadTime: f.uploadTime, series: f.series.trim(), description: f.description,
     format: f.format, type: f.type, tags: f.tags, traffic: f.traffic, keywords: f.keywords.filter(k => String(k.keyword).trim()), log: f.log });
   const hasStat = !c.ytId && ['views', 'likes', 'comments', 'subs'].some(k => f[k] !== '' && f[k] != null);
@@ -1966,7 +2104,7 @@ function saveSnapshot(id) {
   const v = (sel, k) => $(sel).value === '' ? Math.round(prev[k]) : +$(sel).value;
   c.stats = c.stats.filter(s => s.date !== date);
   c.stats.push({ date, views: v('#sn_v', 'views'), likes: v('#sn_l', 'likes'), comments: v('#sn_c', 'comments'), subs: v('#sn_s', 'subs') });
-  bust(c); save(); closeModal(); toast('기록했어요'); render();
+  c.editedAt = Date.now(); bust(c); save(); closeModal(); toast('기록했어요'); render();
 }
 
 /* ---------- 검색어 → 관련 콘텐츠 ---------- */
@@ -2008,10 +2146,10 @@ document.addEventListener('click', e => {
   else if (a === 'snapshot') openSnapshot(act.dataset.id);
   else if (a === 'delete') {
     const c = DB.contents.find(x => x.id === act.dataset.id);
-    if (c && confirm(`"${c.title}" 콘텐츠와 모든 기록을 삭제할까요?`)) { DB.contents = DB.contents.filter(x => x !== c); save(); toast('삭제했어요'); location.hash = '#/contents'; }
+    if (c && confirm(`"${c.title}" 콘텐츠와 모든 기록을 삭제할까요?`)) { DB.contents = DB.contents.filter(x => x !== c); DB.deleted = (DB.deleted || []).concat(c.id); save(); toast('삭제했어요'); location.hash = '#/contents'; }
   } else if (a === 'del-stat') {
     const c = DB.contents.find(x => x.id === act.dataset.id);
-    if (c && confirm(`${act.dataset.date} 기록을 삭제할까요?`)) { c.stats = c.stats.filter(s => s.date !== act.dataset.date); bust(c); save(); render(); }
+    if (c && confirm(`${act.dataset.date} 기록을 삭제할까요?`)) { c.stats = c.stats.filter(s => s.date !== act.dataset.date); c.editedAt = Date.now(); bust(c); save(); render(); }
   } else if (a === 'del-sub') {
     if (confirm(`${act.dataset.date} 구독자 기록을 삭제할까요?`)) { DB.subscriberHistory = DB.subscriberHistory.filter(h => h.date !== act.dataset.date); save(); render(); }
   } else if (a === 'clear-sample') {
@@ -2023,15 +2161,15 @@ document.addEventListener('click', e => {
   } else if (a === 'save-idea') {
     toast(addIdea(act.dataset.idea) ? '아이디어 보관함에 담았어요' : '이미 담긴 아이디어예요'); render();
   } else if (a === 'idea-done') {
-    const it = (DB.ideas || []).find(i => i.id === act.dataset.id); if (it) { it.done = !it.done; save(); render(); }
+    const it = (DB.ideas || []).find(i => i.id === act.dataset.id); if (it) { it.done = !it.done; it.updatedAt = Date.now(); save(); render(); }
   } else if (a === 'idea-del') {
-    DB.ideas = (DB.ideas || []).filter(i => i.id !== act.dataset.id); save(); render();
+    const it = (DB.ideas || []).find(i => i.id === act.dataset.id); if (it) { it.deleted = true; it.updatedAt = Date.now(); save(); render(); }
   } else if (a === 'sync') {
     runSync();
   } else if (a === 'yt-off') {
     if (confirm('YouTube 연결을 해제할까요? 불러온 데이터는 남아 있고, 자동 새로고침만 멈춰요.')) {
       if (ytToken && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(ytToken.access_token, () => {});
-      ytToken = null; try { sessionStorage.removeItem(KEY + ':tok'); } catch (e) {}
+      ytToken = null; try { localStorage.removeItem(KEY + ':tok'); } catch (e) {}
       DB.yt = null; DB.channelDaily = []; DB.contents.forEach(c => { if (c.ytId) { delete c.ytId; } }); _pc.clear(); save(); render();
     }
   } else if (a === 'export') {
@@ -2090,8 +2228,10 @@ addEventListener('hashchange', render);
 
 DB = load();
 applyTheme();
-if (DB.isSample && !localStorage.getItem(KEY)) save();
+if (DB.isSample && !localStorage.getItem(KEY)) saveLocal();
 if (clientId()) loadGIS().catch(() => {});
+cloudAutoPull();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') cloudAutoPull(); });
 render();
 </script>
 </body>
