@@ -464,6 +464,8 @@ function load() {
 function normalize(d) {
   d.channel = Object.assign({ name: '그냥 은지', owner: '은지', url: '' }, d.channel || {});
   d.subscriberHistory = d.subscriberHistory || [];
+  d.channelDaily = d.channelDaily || [];
+  d.yt = d.yt || null;
   d.contents.forEach(c => {
     c.tags = c.tags || []; c.stats = c.stats || []; c.traffic = c.traffic || {};
     c.keywords = c.keywords || []; c.log = c.log || {};
@@ -473,6 +475,212 @@ function normalize(d) {
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(DB)); }
   catch (e) { console.error(e); toast('저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.'); }
+}
+
+/* =========================================================
+   YouTube 연동 (브라우저에서 구글 로그인 → Data API + Analytics API)
+   서버·비밀키 없이 동작. 클라이언트 ID는 공개돼도 되는 값.
+   ========================================================= */
+const DEFAULT_CLIENT_ID = '';
+const YT_SCOPES = ['https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/yt-analytics.readonly'];
+const DATA_API = 'https://www.googleapis.com/youtube/v3/';
+const ANALYTICS_API = 'https://youtubeanalytics.googleapis.com/v2/reports';
+const SOURCE_MAP = {
+  SHORTS: 'Shorts 피드', YT_SEARCH: 'YouTube 검색', RELATED_VIDEO: '추천 동영상', SUBSCRIBER: '탐색 기능',
+  YT_CHANNEL: '채널 페이지', EXT_URL: '외부',
+};
+const mapSource = t => SOURCE_MAP[t] || '기타';
+const clientId = () => { try { return localStorage.getItem(KEY + ':clientId') || DEFAULT_CLIENT_ID; } catch (e) { return DEFAULT_CLIENT_ID; } };
+let ytToken = null;
+try { ytToken = JSON.parse(sessionStorage.getItem(KEY + ':tok') || 'null'); } catch (e) {}
+
+let gisPromise = null;
+function loadGIS() {
+  if (window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
+  if (!gisPromise) gisPromise = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+    s.onload = () => res(); s.onerror = () => { gisPromise = null; rej(new Error('구글 로그인 스크립트를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.')); };
+    document.head.append(s);
+  });
+  return gisPromise;
+}
+// 팝업 차단을 피하려면 클릭 직후 동기적으로 requestAccessToken을 불러야 해서, 스크립트는 미리 불러 둔다.
+function getToken() {
+  if (ytToken && ytToken.exp > Date.now() + 60000) return Promise.resolve(ytToken.access_token);
+  const cid = clientId();
+  if (!cid) return Promise.reject(new Error('먼저 설정에서 구글 클라이언트 ID를 입력해 주세요.'));
+  const ask = () => new Promise((res, rej) => {
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: cid, scope: YT_SCOPES.join(' '), prompt: DB.yt ? '' : 'consent',
+      callback: r => {
+        if (r.error) return rej(new Error('구글 로그인 실패: ' + (r.error_description || r.error)));
+        if (!google.accounts.oauth2.hasGrantedAllScopes(r, ...YT_SCOPES)) return rej(new Error('YouTube 데이터 보기 권한 두 가지를 모두 허용해야 해요.'));
+        ytToken = { access_token: r.access_token, exp: Date.now() + (+r.expires_in || 3600) * 1000 };
+        try { sessionStorage.setItem(KEY + ':tok', JSON.stringify(ytToken)); } catch (e) {}
+        res(ytToken.access_token);
+      },
+      error_callback: e => rej(new Error(e && e.type === 'popup_closed' ? '로그인 창이 닫혔어요.' : e && e.type === 'popup_failed_to_open' ? '팝업이 차단됐어요. 브라우저에서 팝업을 허용한 뒤 다시 눌러 주세요.' : '구글 로그인 오류: ' + ((e && (e.message || e.type)) || ''))),
+    });
+    client.requestAccessToken();
+  });
+  if (window.google && google.accounts && google.accounts.oauth2) return ask();
+  return loadGIS().then(ask);
+}
+async function ytApi(url, params) {
+  const u = new URL(url);
+  Object.entries(params).forEach(([k, v]) => { if (v !== '' && v != null) u.searchParams.set(k, v); });
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(u, { headers: { Authorization: 'Bearer ' + ytToken.access_token } });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) return j;
+    if ((r.status === 429 || r.status >= 500) && attempt < 3) { await new Promise(ok => setTimeout(ok, 800 * 2 ** attempt)); continue; }
+    if (r.status === 401) { ytToken = null; try { sessionStorage.removeItem(KEY + ':tok'); } catch (e) {} }
+    const er = j.error || {};
+    const reason = (er.errors && er.errors[0] && er.errors[0].reason) || er.status || '';
+    const err = new Error(er.message || ('HTTP ' + r.status)); err.status = r.status; err.reason = reason; err.api = url;
+    throw err;
+  }
+}
+const rowsOf = j => (j.rows || []).map(r => Object.fromEntries(j.columnHeaders.map((h, i) => [h.name, r[i]])));
+async function pool(items, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; await fn(items[k], k); } }));
+}
+const localDate = iso => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const localTime = iso => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+function isoSeconds(p) { const m = String(p || '').match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/); return m ? (+m[1] || 0) * 86400 + (+m[2] || 0) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0) : 0; }
+// 일별 누적 기록을 저장 용량에 맞게 줄인다: 업로드 후 30일은 매일, 그 뒤로는 주 1회 + 마지막 날.
+function thinStats(stats, up) {
+  return stats.filter((s, i) => i === stats.length - 1 || dn(s.date) - up <= 30 || (dn(s.date) - up) % 7 === 0);
+}
+
+async function syncYouTube(progress) {
+  await getToken();
+  progress('채널 정보 확인 중…');
+  const chRes = await ytApi(DATA_API + 'channels', { part: 'snippet,statistics,contentDetails', mine: 'true' });
+  const ch = chRes.items && chRes.items[0];
+  if (!ch) throw new Error('로그인한 구글 계정에 유튜브 채널이 없어요. 로그인할 때 "그냥 은지" 채널(브랜드 계정)을 선택했는지 확인해 주세요.');
+  const ids = []; let pageToken = '';
+  do {
+    const j = await ytApi(DATA_API + 'playlistItems', { part: 'contentDetails', playlistId: ch.contentDetails.relatedPlaylists.uploads, maxResults: 50, pageToken });
+    (j.items || []).forEach(it => ids.push(it.contentDetails.videoId)); pageToken = j.nextPageToken || '';
+  } while (pageToken);
+  progress(`영상 ${ids.length}개 정보 불러오는 중…`);
+  const vids = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const j = await ytApi(DATA_API + 'videos', { part: 'snippet,statistics,contentDetails,status', id: ids.slice(i, i + 50).join(',') });
+    vids.push(...(j.items || []));
+  }
+  const pub = vids.filter(v => v.status && v.status.privacyStatus !== 'private');
+  const today = ds(todayN());
+  const chStart = localDate(ch.snippet.publishedAt);
+  const A = p => ytApi(ANALYTICS_API, Object.assign({ ids: 'channel==MINE', startDate: chStart, endDate: today }, p));
+  progress('채널 일별 분석 불러오는 중…');
+  const daily = rowsOf(await A({ dimensions: 'day', metrics: 'views,likes,comments,subscribersGained,subscribersLost,estimatedMinutesWatched', sort: 'day' }));
+  const perVideo = new Map(rowsOf(await A({ dimensions: 'video', metrics: 'views,estimatedMinutesWatched,averageViewDuration', sort: '-views', maxResults: 200 })).map(r => [r.video, r]));
+
+  let done = 0;
+  const detail = new Map();
+  await pool(pub, 3, async v => {
+    const f = `video==${v.id}`, vs = localDate(v.snippet.publishedAt);
+    const soft = p => p.catch(e => { console.warn('선택 항목 실패', v.id, e); return null; });
+    const [d, tr, kw, ct] = await Promise.all([
+      A({ startDate: vs, dimensions: 'day', metrics: 'views,likes,comments,subscribersGained', filters: f, sort: 'day' }),
+      soft(A({ startDate: vs, dimensions: 'insightTrafficSourceType', metrics: 'views,estimatedMinutesWatched', filters: f })),
+      soft(A({ startDate: vs, dimensions: 'insightTrafficSourceDetail', metrics: 'views', filters: f + ';insightTrafficSourceType==YT_SEARCH', sort: '-views', maxResults: 10 })),
+      soft(A({ startDate: vs, dimensions: 'creatorContentType', metrics: 'views', filters: f })),
+    ]);
+    detail.set(v.id, { d: rowsOf(d), tr: tr ? rowsOf(tr) : [], kw: kw ? rowsOf(kw) : [], ct: ct ? rowsOf(ct) : [] });
+    progress(`영상별 분석 ${++done} / ${pub.length}`);
+  });
+
+  // ---- 저장 구조로 합치기 (회고·유형·태그 등 직접 쓴 내용은 보존) ----
+  if (DB.isSample) { DB.contents = []; DB.subscriberHistory = []; DB.isSample = false; }
+  pub.forEach(v => {
+    const x = detail.get(v.id) || { d: [], tr: [], kw: [], ct: [] };
+    let c = DB.contents.find(y => y.ytId === v.id) || DB.contents.find(y => !y.ytId && ytId(y.url) === v.id);
+    const isNew = !c;
+    if (isNew) {
+      const tags = [...new Set(((v.snippet.title || '') + ' ' + (v.snippet.description || '')).match(/#[^\s#]+/g) || [])].map(t => t.slice(1)).filter(t => !/^shorts?$/i.test(t)).slice(0, 5);
+      c = { id: uid(), type: '기타', series: '', tags, log: {}, createdAt: Date.now() };
+      DB.contents.push(c);
+    }
+    const up = dn(localDate(v.snippet.publishedAt));
+    let cv = 0, cl = 0, cc = 0, cs = 0;
+    let stats = x.d.map(r => { cv += +r.views || 0; cl += +r.likes || 0; cc += +r.comments || 0; cs += +r.subscribersGained || 0; return { date: r.day, views: cv, likes: cl, comments: cc, subs: cs }; })
+      .filter(s => dn(s.date) >= up);
+    stats = thinStats(stats, up);
+    const st = v.statistics || {};
+    const live = { views: +st.viewCount || 0, likes: +st.likeCount || 0, comments: +st.commentCount || 0 };
+    if (live.views >= cv && (!stats.length || stats[stats.length - 1].date !== today)) stats.push({ date: today, views: live.views, likes: Math.max(cl, live.likes), comments: Math.max(cc, live.comments), subs: cs });
+    const traffic = {}, trafficMinutes = {};
+    x.tr.forEach(r => { const k = mapSource(r.insightTrafficSourceType); traffic[k] = (traffic[k] || 0) + (+r.views || 0); trafficMinutes[k] = (trafficMinutes[k] || 0) + (+r.estimatedMinutesWatched || 0); });
+    const secs = isoSeconds(v.contentDetails && v.contentDetails.duration);
+    let format;
+    const ctTop = x.ct.slice().sort((a, b) => b.views - a.views)[0];
+    if (ctTop && ctTop.creatorContentType) format = /short/i.test(ctTop.creatorContentType) ? 'Shorts' : '롱폼';
+    else { const tv = sum(Object.values(traffic)); format = (tv && (traffic['Shorts 피드'] || 0) / tv >= 0.5) || (secs && secs <= 60) ? 'Shorts' : '롱폼'; }
+    const pv = perVideo.get(v.id) || {};
+    Object.assign(c, {
+      ytId: v.id, title: v.snippet.title, description: v.snippet.description || '',
+      url: `https://www.youtube.com/${format === 'Shorts' ? 'shorts/' : 'watch?v='}${v.id}`,
+      thumbnail: ((v.snippet.thumbnails || {}).medium || (v.snippet.thumbnails || {}).default || {}).url || '',
+      uploadDate: localDate(v.snippet.publishedAt), uploadTime: localTime(v.snippet.publishedAt),
+      stats, traffic, trafficMinutes,
+      keywords: x.kw.map(r => ({ keyword: r.insightTrafficSourceDetail, views: +r.views || 0 })),
+      durationSec: secs, minutesWatched: +pv.estimatedMinutesWatched || 0, avgViewDuration: +pv.averageViewDuration || 0,
+    });
+    if (!c.formatLocked) c.format = format;
+    if (isNew && format === 'Shorts' && c.type === '기타') c.type = '기타';
+    c.log = c.log || {}; c.tags = c.tags || [];
+  });
+  DB.channelDaily = daily.map(r => ({ date: r.day, views: +r.views || 0, likes: +r.likes || 0, comments: +r.comments || 0, subsGained: +r.subscribersGained || 0, subsLost: +r.subscribersLost || 0, minutes: +r.estimatedMinutesWatched || 0 }));
+  // 구독자 수 기록: 일별 (얻은 − 잃은) 누적. 최근 120일은 매일, 그 전은 주 1회.
+  let acc = 0; const hist = [];
+  const lastDay = DB.channelDaily.length ? dn(DB.channelDaily[DB.channelDaily.length - 1].date) : todayN();
+  DB.channelDaily.forEach((r, i) => {
+    acc += r.subsGained - r.subsLost;
+    const d = dn(r.date);
+    if (lastDay - d <= 120 || d % 7 === 0 || i === 0 || i === DB.channelDaily.length - 1) hist.push({ date: r.date, count: acc });
+  });
+  DB.subscriberHistory = hist;
+  DB.yt = {
+    channelId: ch.id, title: ch.snippet.title, handle: ch.snippet.customUrl || '', lastSync: Date.now(),
+    publicSubs: ch.statistics.hiddenSubscriberCount ? null : +ch.statistics.subscriberCount, totalViews: +ch.statistics.viewCount || 0,
+    videoCount: pub.length, dataUntil: DB.channelDaily.length ? DB.channelDaily[DB.channelDaily.length - 1].date : '',
+  };
+  if (!DB.channel.url) DB.channel.url = 'https://www.youtube.com/' + (ch.snippet.customUrl || 'channel/' + ch.id);
+  _pc.clear(); DB.contents.forEach(bust);
+  save();
+}
+function syncErrorText(e) {
+  const m = e && e.message || String(e);
+  if (e && e.reason === 'accessNotConfigured' || /has not been used|is disabled/i.test(m)) return 'Google Cloud에서 "YouTube Data API v3"와 "YouTube Analytics API"를 둘 다 "사용"으로 켰는지 확인해 주세요.\n\n(' + m + ')';
+  if (e && e.status === 403) return '권한이 거부됐어요. 채널 소유 계정(또는 그냥 은지 브랜드 계정)으로 로그인했는지, 테스트 사용자에 그 계정을 추가했는지 확인해 주세요.\n\n(' + m + ')';
+  return m;
+}
+async function runSync() {
+  $('#modalRoot').innerHTML = `<div class="modal-bg" id="mbg"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="syT" style="width:min(460px,100%)">
+    <div class="modal-h"><h2 id="syT">YouTube 데이터 가져오는 중</h2></div>
+    <div class="modal-b"><p id="syP" style="margin:0 0 6px">구글 로그인 창에서 채널 계정을 선택해 주세요…</p><p class="muted small" style="margin:0">영상 수에 따라 1분 정도 걸릴 수 있어요.</p></div></div></div>`;
+  const syncing = syncYouTube(t => { const p = $('#syP'); if (p) p.textContent = t; });
+  try {
+    await syncing;
+    closeModal(); toast('YouTube 데이터를 불러왔어요'); render();
+  } catch (e) {
+    console.error(e);
+    $('#modalRoot').innerHTML = `<div class="modal-bg" id="mbg"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="syE" style="width:min(520px,100%)">
+      <div class="modal-h"><h2 id="syE">불러오지 못했어요</h2><button class="btn ghost sm" data-w="close" aria-label="닫기">✕</button></div>
+      <div class="modal-b"><p style="white-space:pre-wrap;margin-top:0">${esc(syncErrorText(e))}</p><p class="muted small">문제가 계속되면 이 메시지를 그대로 알려 주세요.</p></div>
+      <div class="modal-f"><span class="sp"></span><button class="btn" data-w="close">닫기</button><button class="btn primary" data-act="sync">다시 시도</button></div></div></div>`;
+  }
+}
+const agoText = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? '방금' : m < 60 ? m + '분 전' : m < 1440 ? Math.round(m / 60) + '시간 전' : Math.round(m / 1440) + '일 전'; };
+function ytStatus() {
+  if (!DB.yt) return '';
+  return `<span class="muted small">▶ YouTube 동기화 ${agoText(DB.yt.lastSync)}${DB.yt.dataUntil ? ` · 분석 데이터 ${esc(DB.yt.dataUntil.slice(5).replace('-', '/'))}까지` : ''}</span>
+    <button class="btn sm" data-act="sync">↻ 새로고침</button>`;
 }
 
 /* ---------- 샘플 데이터 (오늘 날짜 기준으로 생성) ---------- */
@@ -593,7 +801,8 @@ const PERIODS = [['7', '최근 7일'], ['30', '최근 30일'], ['90', '최근 90
 let period = { key: '30', start: '', end: '' };
 try { const p = JSON.parse(localStorage.getItem(KEY + ':period') || 'null'); if (p && p.key) period = p; } catch (e) {}
 function range() {
-  const T = todayN();
+  // YouTube 분석은 2~3일 늦게 들어오므로, 연동 중이면 마지막 데이터 날짜를 '오늘'로 본다.
+  const T = DB.yt && DB.yt.dataUntil ? Math.min(todayN(), dn(DB.yt.dataUntil)) : todayN();
   let s, e = T;
   if (['7', '30', '90'].includes(period.key)) s = T - (+period.key - 1);
   else if (period.key === 'year') s = dn(new Date().getFullYear() + '-01-01');
@@ -609,6 +818,12 @@ function range() {
 }
 function periodTotals(s, e) {
   const o = { views: 0, likes: 0, comments: 0, subs: 0 };
+  // YouTube 연동 시에는 채널 일별 분석(삭제·비공개 영상 포함, 정확한 값)을 쓴다.
+  if (DB.channelDaily && DB.channelDaily.length) {
+    o.lost = 0;
+    for (const r of DB.channelDaily) { const d = dn(r.date); if (d >= s && d <= e) { o.views += r.views; o.likes += r.likes; o.comments += r.comments; o.subs += r.subsGained; o.lost += r.subsLost; } }
+    return o;
+  }
   DB.contents.forEach(c => { const r = inRange(c, s, e); for (const m in o) o[m] += r[m]; });
   return o;
 }
@@ -808,9 +1023,12 @@ function bindPeriod() {
 function persistPeriod() { try { localStorage.setItem(KEY + ':period', JSON.stringify(period)); } catch (e) {} }
 
 function sampleBanner() {
-  if (!DB.isSample) return '';
-  return `<div class="banner"><span aria-hidden="true">🧪</span><p><b>지금 보이는 숫자는 예시 데이터예요.</b> 둘러본 뒤 샘플을 지우고 은지 채널의 실제 기록을 입력해 보세요.</p>
-    <button class="btn sm" data-act="clear-sample">샘플 지우고 시작하기</button></div>`;
+  if (DB.yt) return `<div class="filters" style="margin:-6px 0 14px">${ytStatus()}</div>`;
+  if (!DB.isSample) return clientId() ? '' : `<div class="banner"><span aria-hidden="true">▶</span><p><b>YouTube 채널을 연결하면 실제 분석이 자동으로 채워져요.</b></p>
+    <a class="btn sm primary" href="#/settings">YouTube 연결하기</a></div>`;
+  return `<div class="banner"><span aria-hidden="true">🧪</span><p><b>지금 보이는 숫자는 예시 데이터예요.</b> YouTube 채널을 연결하면 실제 분석으로 바뀌어요.</p>
+    <a class="btn sm primary" href="#/settings">YouTube 연결하기</a>
+    <button class="btn sm" data-act="clear-sample">샘플만 지우기</button></div>`;
 }
 function addBtn() { return `<button class="btn primary" data-act="add">＋ 콘텐츠 추가</button>`; }
 
@@ -1014,14 +1232,15 @@ function bindPerfControls(scope) {
   const s = $('#' + scope + 'Sort'); if (s) s.addEventListener('change', () => { ui[scope + 'Sort'] = s.value; render(); });
 }
 function aggTraffic(R) {
-  const m = Object.fromEntries(SOURCES.map(s => [s, 0]));
+  const m = Object.fromEntries(SOURCES.map(s => [s, 0])), mm = Object.fromEntries(SOURCES.map(s => [s, 0]));
   DB.contents.forEach(c => {
     const tv = sum(Object.values(c.traffic || {})); if (!tv) return;
     const pv = inRange(c, R.s, R.e).views; const T = total(c).views || tv;
     const ratio = pv / T;
     for (const [k, v] of Object.entries(c.traffic)) { if (k in m) m[k] += v * ratio; else m['기타'] += v * ratio; }
+    for (const [k, v] of Object.entries(c.trafficMinutes || {})) { mm[k in mm ? k : '기타'] += v * ratio; }
   });
-  return SOURCES.map((s, i) => ({ label: s, value: Math.round(m[s]), color: SOURCE_COLORS[i] }));
+  return SOURCES.map((s, i) => ({ label: s, value: Math.round(m[s]), minutes: mm[s], color: SOURCE_COLORS[i] }));
 }
 function aggKeywords(R) {
   const m = new Map();
@@ -1177,8 +1396,11 @@ function pageDetail(id) {
         <div class="kpi"><span class="val">${fmt(t.comments)}</span><span class="lbl"><span class="dot" style="background:var(--comments)"></span>댓글 · ${pct(t.comments, t.views, 2)}</span></div>
         <div class="kpi"><span class="val">${signed(t.subs)}</span><span class="lbl"><span class="dot" style="background:var(--subs)"></span>구독자 증가</span></div>
       </div>
+      ${c.ytId && (c.avgViewDuration || c.minutesWatched) ? `<div class="d-meta" style="margin-top:12px">
+        <span>⏱ 평균 시청 ${Math.floor(c.avgViewDuration / 60)}분 ${Math.round(c.avgViewDuration % 60)}초${c.durationSec ? ` (영상 길이의 ${pct(c.avgViewDuration, c.durationSec, 0)})` : ''}</span><span>·</span>
+        <span>총 시청시간 ${fmt(c.minutesWatched / 60)}시간</span></div>` : ''}
       <div class="top-actions" style="margin-top:16px">
-        <button class="btn primary" data-act="snapshot" data-id="${esc(c.id)}">＋ 오늘 성과 기록</button>
+        ${c.ytId ? `<span class="muted small">▶ YouTube에서 자동 기록</span>` : `<button class="btn primary" data-act="snapshot" data-id="${esc(c.id)}">＋ 오늘 성과 기록</button>`}
         <button class="btn" data-act="edit" data-id="${esc(c.id)}">수정</button>
         <button class="btn danger" data-act="delete" data-id="${esc(c.id)}">삭제</button>
       </div>
@@ -1197,7 +1419,7 @@ function pageDetail(id) {
       <div class="chart" id="dChart"></div>
       <p class="muted small" style="margin:8px 0 0">${stats.length < 2 ? '성과를 여러 날 기록할수록 초반에 뜨는 콘텐츠인지, 늦게 떡상하는 콘텐츠인지 보여요.' : growthNote(c)}</p></div>
     <div class="card"><div class="card-h"><h2>유입 경로</h2></div>
-      ${sum(tr, x => x.value) ? donutHTML(tr, compact(sum(tr, x => x.value)), '조회수') : `<div class="empty small">수정에서 유입 경로를 입력할 수 있어요</div>`}
+      ${sum(tr, x => x.value) ? donutHTML(tr, compact(sum(tr, x => x.value)), '조회수') : `<div class="empty small">${c.ytId ? '아직 유입 데이터가 없어요' : '수정에서 유입 경로를 입력할 수 있어요'}</div>`}
       ${c.keywords.length ? `<h3 style="font-size:13px;margin:18px 0 6px">검색어</h3><ol class="kw">${c.keywords.slice().sort((a, b) => b.views - a.views).map((k, i) => `<li><button type="button" data-kw="${esc(k.keyword)}"><span class="rk">${i + 1}</span><span class="kn">${esc(k.keyword)}</span><span class="kv">${fmt(k.views)}</span></button></li>`).join('')}</ol>` : ''}
     </div>
   </div>
@@ -1211,9 +1433,9 @@ function pageDetail(id) {
     </dl></div>
   </div>
   <div class="card"><div class="card-h"><h2>성과 기록 히스토리</h2><span class="sub">날짜별 누적값 · 기록이 쌓여야 성장 곡선이 보존돼요</span></div>
-    ${stats.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>기록일</th><th>업로드 후</th><th class="num">조회수</th><th class="num">좋아요</th><th class="num">댓글</th><th class="num">구독자</th><th></th></tr></thead><tbody>
+    ${stats.length ? `<div class="tbl-wrap" style="max-height:420px;overflow-y:auto"><table class="tbl"><thead><tr><th>기록일</th><th>업로드 후</th><th class="num">조회수</th><th class="num">좋아요</th><th class="num">댓글</th><th class="num">구독자</th><th></th></tr></thead><tbody>
       ${stats.map(s => `<tr><td>${ymd(dn(s.date))}</td><td>D+${dn(s.date) - up}</td><td class="num">${fmt(s.views)}</td><td class="num">${fmt(s.likes)}</td><td class="num">${fmt(s.comments)}</td><td class="num">${signed(+s.subs || 0)}</td>
-        <td class="num"><button class="btn ghost sm danger" data-act="del-stat" data-id="${esc(c.id)}" data-date="${esc(s.date)}" aria-label="${esc(s.date)} 기록 삭제">삭제</button></td></tr>`).join('')}
+        <td class="num">${c.ytId ? '' : `<button class="btn ghost sm danger" data-act="del-stat" data-id="${esc(c.id)}" data-date="${esc(s.date)}" aria-label="${esc(s.date)} 기록 삭제">삭제</button>`}</td></tr>`).join('')}
     </tbody></table></div>` : `<div class="empty small">아직 성과 기록이 없어요</div>`}</div>`;
 }
 function growthNote(c) {
@@ -1245,8 +1467,10 @@ function pageSubscribers() {
   const now = currentSubs();
   const a = subsAt(R.s - 1), b = subsAt(R.e);
   const net = a != null && b != null ? Math.round(b - a) : null;
-  const gained = Math.round(periodTotals(R.s, R.e).subs);
-  const lost = net != null ? Math.max(0, gained - net) : null;
+  const PT = periodTotals(R.s, R.e);
+  const gained = Math.round(PT.subs);
+  const exact = PT.lost != null;
+  const lost = exact ? PT.lost : net != null ? Math.max(0, gained - net) : null;
   const contrib = DB.contents.map(c => ({ c, v: inRange(c, R.s, R.e).subs, views: inRange(c, R.s, R.e).views })).filter(x => x.v > 0).sort((x, y) => y.v - x.v);
   const hist = DB.subscriberHistory.slice().sort((x, y) => dn(y.date) - dn(x.date));
   return `
@@ -1255,14 +1479,15 @@ function pageSubscribers() {
   <div class="filters" style="margin-bottom:16px">${periodControls()}<span class="muted small">${ymd(R.s)} ~ ${ymd(R.e)}</span></div>
   <div class="grid g-kpi">
     <div class="card kpi"><span class="val">${now != null ? fmt(now) : '—'}</span><span class="lbl"><span class="dot" style="background:var(--subs)"></span>현재 구독자</span></div>
-    <div class="card kpi"><span class="val">${signed(gained)}</span><span class="lbl">콘텐츠로 얻은 구독자</span><div class="delta">각 콘텐츠 기록의 합</div></div>
-    <div class="card kpi"><span class="val">${lost != null ? (lost ? '−' + fmt(lost) : '0') : '—'}</span><span class="lbl">추정 이탈</span><div class="delta">얻은 구독자 − 순증</div></div>
+    <div class="card kpi"><span class="val">${signed(gained)}</span><span class="lbl">${exact ? '새로 구독' : '콘텐츠로 얻은 구독자'}</span><div class="delta">${exact ? 'YouTube 분석 기준' : '각 콘텐츠 기록의 합'}</div></div>
+    <div class="card kpi"><span class="val">${lost != null ? (lost ? '−' + fmt(lost) : '0') : '—'}</span><span class="lbl">${exact ? '구독 취소' : '추정 이탈'}</span><div class="delta">${exact ? 'YouTube 분석 기준' : '얻은 구독자 − 순증'}</div></div>
     <div class="card kpi"><span class="val">${net != null ? signed(net) : '—'}</span><span class="lbl">순증</span><div class="delta">채널 구독자 기록 기준</div></div>
   </div>
   <div class="grid g-21">
     <div class="card"><div class="card-h"><h2>구독자 변화</h2><span class="sub">${R.len > 120 ? '주 단위' : '일 단위'}</span></div><div class="chart" id="subsChart"></div></div>
     <div class="card"><div class="card-h"><h2>구독자 수 기록</h2></div>
-      <form id="subForm" class="row2" style="align-items:end;margin-bottom:12px">
+      ${DB.yt ? `<p class="muted small" style="margin:0 0 8px">YouTube 분석의 일별 구독/구독 취소로 자동 계산돼요. 분석 데이터는 보통 2~3일 늦게 반영돼요.${DB.yt.publicSubs != null ? ` (채널 페이지 공개 구독자 수: ${fmt(DB.yt.publicSubs)}명, 1,000명 이상은 반올림 표시)` : ''}</p>` : ''}
+      <form id="subForm" ${DB.yt ? 'hidden' : ''} class="row2" style="align-items:end;margin-bottom:12px">
         <div class="fld" style="margin:0"><label for="sfD">날짜</label><input class="inp" type="date" id="sfD" value="${ds(todayN())}" required></div>
         <div class="fld" style="margin:0"><label for="sfC">구독자 수</label><input class="inp" type="number" min="0" id="sfC" placeholder="${now != null ? now : '예: 2571'}" required></div>
         <button class="btn primary" type="submit" style="grid-column:1/-1;justify-content:center">기록하기</button>
@@ -1279,7 +1504,7 @@ function pageSubscribers() {
 function afterSubscribers() {
   bindPeriod();
   subsChart($('#subsChart'), range(), 380);
-  $('#subForm').addEventListener('submit', e => {
+  if (!DB.yt) $('#subForm').addEventListener('submit', e => {
     e.preventDefault();
     const date = $('#sfD').value, count = +$('#sfC').value;
     if (!date || !(count >= 0)) return;
@@ -1295,6 +1520,7 @@ function pageTraffic() {
   const R = range();
   const agg = aggTraffic(R);
   const tot = sum(agg, x => x.value);
+  const hasMin = agg.some(a => a.minutes > 0);
   const kws = aggKeywords(R);
   const bySource = SOURCES.map(s => {
     const best = DB.contents.map(c => { const T = total(c).views; const r = T ? inRange(c, R.s, R.e).views / T : 0; return { c, v: (+c.traffic[s] || 0) * r }; }).sort((a, b) => b.v - a.v)[0];
@@ -1306,11 +1532,11 @@ function pageTraffic() {
   <div class="filters" style="margin-bottom:16px">${periodControls()}<span class="muted small">${ymd(R.s)} ~ ${ymd(R.e)}</span></div>
   <div class="grid g-21">
     <div class="card"><div class="card-h"><h2>유입 경로별 조회수</h2></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>유입 경로</th><th class="num">조회수</th><th class="num">비율</th><th>가장 많이 유입된 콘텐츠</th></tr></thead><tbody>
-      ${agg.map((a, i) => `<tr><td><span class="sw" style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${a.color};margin-right:8px"></span>${esc(a.label)}</td><td class="num">${fmt(a.value)}</td><td class="num">${pct(a.value, tot)}</td>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>유입 경로</th><th class="num">조회수</th><th class="num">비율</th>${hasMin ? '<th class="num">시청시간</th><th class="num">1회당 시청</th>' : ''}<th>가장 많이 유입된 콘텐츠</th></tr></thead><tbody>
+      ${agg.map((a, i) => `<tr><td><span class="sw" style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${a.color};margin-right:8px"></span>${esc(a.label)}</td><td class="num">${fmt(a.value)}</td><td class="num">${pct(a.value, tot)}</td>${hasMin ? `<td class="num">${fmt(a.minutes / 60)}시간</td><td class="num">${a.value ? (a.minutes / a.value * 60).toFixed(0) + '초' : '—'}</td>` : ''}
         <td>${bySource[i] ? `<a href="#/content/${esc(bySource[i].c.id)}">${esc(bySource[i].c.title)}</a>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
       </tbody></table></div>
-      <p class="muted small" style="margin:10px 0 0">콘텐츠별 유입 비율을 선택 기간의 조회수에 적용해 계산해요. 시청시간·유입별 구독 전환은 YouTube API 연동(Phase 3) 이후 추가 예정.</p></div>
+      <p class="muted small" style="margin:10px 0 0">콘텐츠별 유입 비율을 선택 기간의 조회수에 적용해 계산해요.${hasMin ? ' 시청시간은 YouTube 분석 기준이에요.' : ' YouTube를 연결하면 유입별 시청시간도 보여요.'}</p></div>
     <div class="card"><div class="card-h"><h2>비율</h2></div>${donutHTML(agg, compact(tot), '조회수')}</div>
   </div>
   <div class="grid g-11">
@@ -1358,7 +1584,30 @@ function pageLog() {
    ========================================================= */
 function pageSettings() {
   return `
-  <div class="topbar"><div class="grow"><h1>⚙️ 설정</h1><p>채널 정보와 데이터 백업을 관리해요.</p></div></div>
+  <div class="topbar"><div class="grow"><h1>⚙️ 설정</h1><p>YouTube 연결, 채널 정보, 데이터 백업을 관리해요.</p></div></div>
+  <div class="card" id="yt" style="margin-bottom:16px"><div class="card-h"><h2>▶ YouTube 채널 연결</h2>${DB.yt ? `<span class="badge long">연결됨</span>` : ''}</div>
+    ${DB.yt ? `<p style="margin-top:0"><b>${esc(DB.yt.title)}</b> ${DB.yt.handle ? `<span class="muted">${esc(DB.yt.handle)}</span>` : ''} · 영상 ${fmt(DB.yt.videoCount)}개 · 누적 조회수 ${fmt(DB.yt.totalViews)}</p>
+      <div class="filters" style="margin-bottom:14px">${ytStatus()}</div>
+      <p class="muted small">새로고침을 누르면 구글 로그인 창이 잠깐 떴다가 닫힐 수 있어요(로그인은 1시간 유지). 직접 쓴 유형·태그·회고는 새로고침해도 그대로 남아요.</p>` :
+      `<p style="margin-top:0">구글 로그인으로 <b>그냥 은지</b> 채널의 실제 분석(조회수·좋아요·댓글·구독/구독 취소·시청시간·유입 경로·검색어)을 불러와요. 데이터는 이 브라우저에만 저장되고 다른 곳으로 보내지 않아요.</p>`}
+    <form id="cidForm" class="filters" style="margin-bottom:12px">
+      <input class="inp" id="cidIn" value="${esc(clientId())}" placeholder="구글 OAuth 클라이언트 ID (….apps.googleusercontent.com)" style="flex:1;min-width:240px" aria-label="클라이언트 ID">
+      <button class="btn" type="submit">ID 저장</button>
+      <button class="btn primary" type="button" data-act="sync" ${clientId() ? '' : 'disabled'}>${DB.yt ? '↻ 지금 새로고침' : '구글로 로그인해서 가져오기'}</button>
+      ${DB.yt ? `<button class="btn danger" type="button" data-act="yt-off">연결 해제</button>` : ''}
+    </form>
+    <details class="more" ${clientId() ? '' : 'open'}><summary>처음 한 번만: 클라이언트 ID 만드는 방법 (5분)</summary>
+      <ol style="margin:0;padding-left:20px;line-height:1.8">
+        <li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud 콘솔</a>에서 새 프로젝트를 만들어요 (이름 예: justeunzi-dashboard).</li>
+        <li><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener">YouTube Data API v3</a>와 <a href="https://console.cloud.google.com/apis/library/youtubeanalytics.googleapis.com" target="_blank" rel="noopener">YouTube Analytics API</a>를 각각 열어 <b>사용</b>을 눌러요.</li>
+        <li><a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener">Google 인증 플랫폼(OAuth 동의 화면)</a>에서 시작하기 → 앱 이름 아무거나, 대상은 <b>외부</b>로 만들어요.</li>
+        <li>같은 메뉴의 <b>대상</b> → <b>테스트 사용자</b>에 채널을 관리하는 구글 계정 이메일을 추가해요.</li>
+        <li><b>클라이언트</b> → 클라이언트 만들기 → 유형 <b>웹 애플리케이션</b> → 승인된 자바스크립트 원본에 <code>${esc(location.origin.startsWith('http') ? location.origin : 'https://leeej0219.github.io')}</code> 추가 → 만들기.</li>
+        <li>나온 <b>클라이언트 ID</b>를 위 칸에 붙여 넣고 저장 → "구글로 로그인해서 가져오기"를 눌러요.</li>
+      </ol>
+      <p class="muted small">로그인할 때 "Google에서 확인하지 않은 앱" 경고가 나오면 <b>고급 → (앱 이름)(으)로 이동</b>을 누르면 돼요. 본인이 만든 앱이라 안전해요. 채널이 브랜드 계정이면 계정 선택 화면에서 <b>그냥 은지</b> 채널을 골라 주세요.</p>
+    </details>
+  </div>
   <div class="grid g-11">
     <div class="card"><div class="card-h"><h2>채널 정보</h2></div>
       <form id="chForm">
@@ -1384,6 +1633,14 @@ function pageSettings() {
   </div>`;
 }
 function afterSettings() {
+  $('#cidForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const v = $('#cidIn').value.trim();
+    if (v && !/\.apps\.googleusercontent\.com$/.test(v)) { toast('클라이언트 ID는 ….apps.googleusercontent.com 으로 끝나요'); return; }
+    try { localStorage.setItem(KEY + ':clientId', v); } catch (err) {}
+    if (v) loadGIS().catch(() => {});
+    toast(v ? '클라이언트 ID를 저장했어요' : '클라이언트 ID를 지웠어요'); render();
+  });
   $('#chForm').addEventListener('submit', e => {
     e.preventDefault();
     DB.channel.name = $('#chN').value.trim() || '그냥 은지';
@@ -1418,7 +1675,7 @@ function openWizard(id, step = 0) {
   const L = Object.assign({}, c ? c.log : {});
   const lt = c ? latest(c) : null;
   wiz = {
-    id: c ? c.id : null, step,
+    id: c ? c.id : null, yt: !!(c && c.ytId), step,
     f: c ? { title: c.title, url: c.url, thumbnail: c.thumbnail, uploadDate: c.uploadDate, uploadTime: c.uploadTime || '', series: c.series || '', description: c.description || '', format: c.format, type: c.type, tags: c.tags.slice(),
       statDate: lt && c.stats.length ? lt.date : ds(todayN()), views: lt && c.stats.length ? lt.views : '', likes: lt && c.stats.length ? lt.likes : '', comments: lt && c.stats.length ? lt.comments : '', subs: lt && c.stats.length ? lt.subs : '',
       origStatDate: lt && c.stats.length ? lt.date : null,
@@ -1448,7 +1705,8 @@ function wizBody() {
         ${existing.length ? `<div class="fld"><span class="l" style="font-weight:500;color:var(--ink-3)">자주 쓴 태그</span><div class="sugg">${existing.map(t => `<button type="button" data-w="sugg" data-t="${esc(t)}">#${esc(t)}</button>`).join('')}</div></div>` : ''}
         <p class="muted small">태그를 달면 태그별 평균 조회수·좋아요율이 자동으로 계산돼요.</p>`;
     }
-    case 3: return `${inp('statDate', '기록 날짜', 'type="date"')}
+    case 3: if (wiz.yt) return `<div class="empty"><b>▶ YouTube에서 자동으로 채워져요</b>조회수·좋아요·댓글·구독자·유입 경로·검색어는 YouTube 새로고침 때마다 업데이트돼요.</div>`;
+      return `${inp('statDate', '기록 날짜', 'type="date"')}
       <p class="muted small" style="margin:-8px 0 12px">YouTube 스튜디오에서 본 <b>지금까지의 누적</b> 숫자를 적어 주세요. 이후엔 상세 페이지의 "오늘 성과 기록"으로 계속 쌓을 수 있어요.</p>
       <div class="row4">${inp('views', '조회수', 'type="number" min="0" inputmode="numeric"')}${inp('likes', '좋아요', 'type="number" min="0" inputmode="numeric"')}${inp('comments', '댓글', 'type="number" min="0" inputmode="numeric"')}${inp('subs', '구독자 증가', 'type="number" inputmode="numeric"')}</div>
       <details class="more" ${sum(Object.values(f.traffic)) ? 'open' : ''}><summary>유입 경로 (선택)</summary>
@@ -1509,9 +1767,10 @@ function saveWizard() {
   const f = wiz.f;
   let c = wiz.id ? DB.contents.find(x => x.id === wiz.id) : null;
   if (!c) { c = { id: uid(), stats: [], createdAt: Date.now() }; DB.contents.push(c); }
+  if (c.ytId && f.format !== c.format) c.formatLocked = true;
   Object.assign(c, { title: f.title.trim(), url: f.url.trim(), thumbnail: f.thumbnail.trim(), uploadDate: f.uploadDate, uploadTime: f.uploadTime, series: f.series.trim(), description: f.description,
     format: f.format, type: f.type, tags: f.tags, traffic: f.traffic, keywords: f.keywords.filter(k => String(k.keyword).trim()), log: f.log });
-  const hasStat = ['views', 'likes', 'comments', 'subs'].some(k => f[k] !== '' && f[k] != null);
+  const hasStat = !c.ytId && ['views', 'likes', 'comments', 'subs'].some(k => f[k] !== '' && f[k] != null);
   if (hasStat) {
     const date = f.statDate || ds(todayN());
     c.stats = c.stats.filter(s => s.date !== date && s.date !== f.origStatDate);
@@ -1606,6 +1865,14 @@ document.addEventListener('click', e => {
     if (!DB.contents.length || confirm('지금 데이터를 예시 데이터로 바꿀까요? (먼저 백업을 권해요)')) { DB = makeSample(); _pc.clear(); save(); render(); }
   } else if (a === 'reset') {
     if (confirm('정말 모든 데이터를 삭제할까요? 되돌릴 수 없어요.')) { DB = { isSample: false, channel: { name: '그냥 은지', owner: '은지', url: '' }, subscriberHistory: [], contents: [] }; _pc.clear(); save(); render(); }
+  } else if (a === 'sync') {
+    runSync();
+  } else if (a === 'yt-off') {
+    if (confirm('YouTube 연결을 해제할까요? 불러온 데이터는 남아 있고, 자동 새로고침만 멈춰요.')) {
+      if (ytToken && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(ytToken.access_token, () => {});
+      ytToken = null; try { sessionStorage.removeItem(KEY + ':tok'); } catch (e) {}
+      DB.yt = null; DB.channelDaily = []; DB.contents.forEach(c => { if (c.ytId) { delete c.ytId; } }); _pc.clear(); save(); render();
+    }
   } else if (a === 'export') {
     const clean = JSON.parse(JSON.stringify(DB, (k, v) => k === '_v' ? undefined : v));
     const blob = new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' });
@@ -1662,6 +1929,7 @@ addEventListener('hashchange', render);
 DB = load();
 applyTheme();
 if (DB.isSample && !localStorage.getItem(KEY)) save();
+if (clientId()) loadGIS().catch(() => {});
 render();
 </script>
 </body>
