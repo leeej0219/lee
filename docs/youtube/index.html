@@ -1424,11 +1424,11 @@ function pageDetail(id) {
     </div>
   </div>
   <div class="grid g-11">
-    <div class="card"><div class="card-h"><h2>제작 전 — 기획</h2></div><dl class="qa">
+    <div class="card"><div class="card-h"><h2>제작 전 — 기획</h2><span class="sp"></span><button class="btn sm" data-act="edit" data-id="${esc(c.id)}" data-step="4">✏️ 기록하기</button></div><dl class="qa">
       ${qa('왜 이 콘텐츠를 만들었나?', L.reason)}${qa('누가 볼 것이라고 생각했나?', L.target)}${qa('첫 3초에 어떤 장치를 넣었나?', L.hook)}${qa('어떤 반응을 기대했나?', L.expected)}
       ${L.format || L.tools || L.hours || L.planDate ? qa('제작 정보', [L.format && '포맷: ' + L.format, L.planDate && '기획 ' + L.planDate, L.shootDate && '촬영 ' + L.shootDate, L.editDate && '편집 ' + L.editDate, L.hours && '소요 ' + L.hours + '시간', L.tools && '프로그램: ' + L.tools].filter(Boolean).join('\n')) : ''}
     </dl></div>
-    <div class="card"><div class="card-h"><h2>업로드 후 — 회고</h2></div><dl class="qa">
+    <div class="card"><div class="card-h"><h2>업로드 후 — 회고</h2><span class="sp"></span><button class="btn sm" data-act="edit" data-id="${esc(c.id)}" data-step="4" data-focus="good">✏️ 기록하기</button></div><dl class="qa">
       ${qa('잘된 점', L.good)}${qa('아쉬운 점', L.bad)}${qa('댓글 반응 / 발견한 인사이트', L.reaction)}${qa('다음에 바꿀 점', L.change)}${qa('다음 콘텐츠 아이디어', L.nextIdea)}
     </dl></div>
   </div>
@@ -1849,7 +1849,7 @@ document.addEventListener('click', e => {
   const act = e.target.closest('[data-act]'); if (!act) return;
   const a = act.dataset.act;
   if (a === 'add') openWizard(null);
-  else if (a === 'edit') openWizard(act.dataset.id, +(act.dataset.step || 0));
+  else if (a === 'edit') { openWizard(act.dataset.id, +(act.dataset.step || 0)); const f = act.dataset.focus && $('#wl_' + act.dataset.focus); if (f) { f.scrollIntoView({ block: 'center' }); f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }
   else if (a === 'snapshot') openSnapshot(act.dataset.id);
   else if (a === 'delete') {
     const c = DB.contents.find(x => x.id === act.dataset.id);
