@@ -4,6 +4,9 @@
 
 ## 구조
 - `작업일지/` — 날짜별 작업 기록 (`YYYY-MM-DD.md`)
+- `docs/` — GitHub Pages로 배포되는 웹앱
+  - `docs/index.html` — 개인 메모장 "종이 한 장"
+  - `docs/youtube/index.html` — 그냥 은지 YouTube 대시보드 (`/lee/youtube/`)
 
 ## 규칙
 - Claude와 함께 진행한 작업 내용은 매번 `작업일지/`에 기록합니다.
