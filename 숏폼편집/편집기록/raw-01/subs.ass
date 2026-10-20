@@ -1,0 +1,38 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Body,Pretendard,56,&H00FFFFFF,&H00FFFFFF,&H00141414,&H80000000,-1,0,0,0,100,100,-1,0,1,3.2,1.5,5,60,60,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:01.50,Body,,0,0,0,,{\pos(540,1305)}여러분들은 직장 동료와
+Dialogue: 0,0:00:01.50,0:00:02.80,Body,,0,0,0,,{\pos(540,1305)}친구가 될 수 있나요?
+Dialogue: 0,0:00:02.80,0:00:04.25,Body,,0,0,0,,{\pos(540,1305)}오늘은 전 직장 동료를
+Dialogue: 0,0:00:04.25,0:00:05.22,Body,,0,0,0,,{\pos(540,1305)}만나러 왔어요
+Dialogue: 0,0:00:05.22,0:00:06.15,Body,,0,0,0,,{\pos(540,1305)}회사 다닐 때부터
+Dialogue: 0,0:00:06.15,0:00:07.75,Body,,0,0,0,,{\pos(540,1305)}먹고 싶었던 닭도리탕집에서
+Dialogue: 0,0:00:07.75,0:00:08.65,Body,,0,0,0,,{\pos(540,1305)}낮술 때리고
+Dialogue: 0,0:00:08.65,0:00:09.70,Body,,0,0,0,,{\pos(540,1305)}같이 카페 왔어요
+Dialogue: 0,0:00:09.70,0:00:10.72,Body,,0,0,0,,{\pos(540,1305)}저희는 회사 다닐 때
+Dialogue: 0,0:00:10.72,0:00:12.10,Body,,0,0,0,,{\pos(540,1305)}릴스를 종종 찍었는데
+Dialogue: 0,0:00:12.10,0:00:13.95,Body,,0,0,0,,{\pos(540,1305)}퇴사하고 밀렸던 릴스 찍었어요
+Dialogue: 0,0:00:13.95,0:00:15.45,Body,,0,0,0,,{\pos(540,1305)}그리고 같이 한강에 가는데
+Dialogue: 0,0:00:15.45,0:00:16.72,Body,,0,0,0,,{\pos(540,1305)}보드집이 있는 거예요
+Dialogue: 0,0:00:16.72,0:00:18.50,Body,,0,0,0,,{\pos(540,1305)}그래서 보드 체험도 했습니다
+Dialogue: 0,0:00:18.50,0:00:19.82,Body,,0,0,0,,{\pos(540,1305)}종종 직장 동료랑
+Dialogue: 0,0:00:19.82,0:00:21.10,Body,,0,0,0,,{\pos(540,1305)}사적으로 친하면 안 된다
+Dialogue: 0,0:00:21.10,0:00:22.45,Body,,0,0,0,,{\pos(540,1305)}이런 이야기도 있는데
+Dialogue: 0,0:00:22.45,0:00:23.70,Body,,0,0,0,,{\pos(540,1305)}저는 직장 동료에게
+Dialogue: 0,0:00:23.70,0:00:24.55,Body,,0,0,0,,{\pos(540,1305)}많이 의지하고
+Dialogue: 0,0:00:24.55,0:00:25.85,Body,,0,0,0,,{\pos(540,1305)}으쌰으쌰 하며 다녀서
+Dialogue: 0,0:00:25.85,0:00:26.85,Body,,0,0,0,,{\pos(540,1305)}회사를 그만둬도
+Dialogue: 0,0:00:26.85,0:00:28.45,Body,,0,0,0,,{\pos(540,1305)}계속 계속 보고 싶더라고요
+Dialogue: 0,0:00:28.45,0:00:29.50,Body,,0,0,0,,{\pos(540,1305)}다음 회사도 같이
+Dialogue: 0,0:00:29.50,0:00:30.75,Body,,0,0,0,,{\pos(540,1305)}다니고 싶을 정도로요
+Dialogue: 0,0:00:30.75,0:00:33.83,Body,,0,0,0,,{\pos(540,1305)}여러분들은 직장 동료와\N친구가 될 수 있나요?
