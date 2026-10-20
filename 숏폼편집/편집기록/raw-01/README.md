@@ -44,3 +44,7 @@
 - 자막 문구는 음성인식 2종(SenseVoice, Whisper turbo)을 비교해 맞춤. 확실치 않은 부분: "낮술 때리고", "으쌰으쌰 하며 다녀서".
 - 수정은 `subs.tsv`(시작초<TAB>문장) 고친 뒤 `mkass.py subs.tsv 33.83 subs.ass` → ffmpeg `ass=` 필터로 다시 입힘.
 - 폰트: Pretendard (GitHub orioncactus/pretendard 릴리스, OFL 라이선스).
+
+## 최종 확정
+- 사용자가 **v4 자막 버전(`완성본/raw01_v4_자막.mp4`)을 최종본으로 확정**. 다음 편집도 이 방식으로 진행하기로 함 → `작업방식.md`에 절차 정리.
+- 최종 파일 구성: `plan.json`(v4 dynamic), `cuts.json`, `subs.tsv`, `subs.ass` / 이전 구성 `plan_v3.json`
