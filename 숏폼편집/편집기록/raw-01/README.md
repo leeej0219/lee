@@ -41,7 +41,7 @@
 ## v4 자막 버전 (같은 날)
 - 레퍼런스 본문 자막 스타일 적용: Pretendard Bold 56px, 흰색 + 얇은 진회색 외곽선(3.2) + 약한 그림자, 가운데 정렬, 세로 y=1305(화면 68%), 애니메이션 없음.
 - 문장은 레퍼런스처럼 의미 단위로 쪼갬(앞 자막은 연결어미로 끝남), 25줄, 평균 약 1.3초. 마지막 질문만 2줄.
-- 자막 문구는 음성인식 2종(SenseVoice, Whisper turbo)을 비교해 맞춤. 확실치 않은 부분: "낮술 때리고", "으쌰으쌰 하며 다녀서".
+- 자막 문구는 음성인식 2종(SenseVoice, Whisper turbo)을 비교해 맞춤. 두 문구("낮술 때리고", "으쌰으쌰 하며 다녀서") 모두 사용자가 맞다고 확인함.
 - 수정은 `subs.tsv`(시작초<TAB>문장) 고친 뒤 `mkass.py subs.tsv 33.83 subs.ass` → ffmpeg `ass=` 필터로 다시 입힘.
 - 폰트: Pretendard (GitHub orioncactus/pretendard 릴리스, OFL 라이선스).
 
