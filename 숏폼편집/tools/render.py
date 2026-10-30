@@ -6,8 +6,11 @@ plan=json.load(open(f'{OUT}/plan.json'))   # [[file, lo, hi, (zoom)], ...] one p
 MODE=os.environ.get('MODE','stable')  # stable | dynamic
 assert len(plan)==len(cuts)-1
 def dur(f): return float(subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',f],capture_output=True,text=True).stdout)
-def frames(f,lo,hi,fps=10,w=135,h=240):
-    raw=subprocess.run(['ffmpeg','-loglevel','error','-ss',str(lo),'-to',str(hi),'-i',f,'-vf',f'fps={fps},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},format=gray','-f','rawvideo','-'],capture_output=True).stdout
+def frames(f,lo,hi,fps=10,w=135,h=240,crop=None):
+    pre=''
+    if crop:
+        cx,cy,z=crop; pre=f'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,crop={int(1080/z)}:{int(1920/z)}:{int(1080*cx-540/z)}:{int(1920*cy-960/z)},'
+    raw=subprocess.run(['ffmpeg','-loglevel','error','-ss',str(lo),'-to',str(hi),'-i',f,'-vf',pre+f'fps={fps},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},format=gray','-f','rawvideo','-'],capture_output=True).stdout
     return np.frombuffer(raw,np.uint8).reshape(-1,h,w).astype(np.float32)
 chosen=[]
 for i,entry in enumerate(plan):
@@ -16,7 +19,7 @@ for i,entry in enumerate(plan):
     hi=min(hi if hi else D, D); lo=lo or 0
     speed=1.0
     if hi-lo<need: speed=(hi-lo)/need; chosen.append((f,lo,hi,speed,need)); continue
-    fr=frames(f,lo,hi)
+    fr=frames(f,lo,hi,crop=entry[5] if len(entry)>5 else None)
     lap=np.abs(fr[:,2:,1:-1]+fr[:,:-2,1:-1]+fr[:,1:-1,2:]+fr[:,1:-1,:-2]-4*fr[:,1:-1,1:-1]).mean((1,2))
     mot=np.r_[0,np.abs(np.diff(fr,axis=0)).mean((1,2))]
     sharp=lap/(lap.max()+1e-6); shake=mot/(np.percentile(mot,95)+1e-6)
@@ -47,6 +50,10 @@ for i,(f,s,e,speed,need) in enumerate(chosen):
     if z:  # slow push-in: 1.0 -> 1+z over the shot
         n=int(round(need*30))
         vf+=f",scale=2160:3840,zoompan=z='1+{z}*on/{n}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30"
+    if len(plan[i])>5 and plan[i][5]:  # punch-in on a subject: [cx, cy, zoom] in 0-1 frame coords
+        cx,cy,cz=plan[i][5]; cw,ch=int(1080/cz)//2*2,int(1920/cz)//2*2
+        x0=min(max(0,int(1080*cx-cw/2)),1080-cw); y0=min(max(0,int(1920*cy-ch/2)),1920-ch)
+        vf+=f',crop={cw}:{ch}:{x0}:{y0},scale=1080:1920:flags=lanczos'
     vf+=f',format=yuv420p,setsar=1,trim=duration={need}'
     if speed!=1.0: print(f'shot{i+1:2d} {os.path.basename(f):9s} slowed x{speed:.2f}')
     subprocess.run(['ffmpeg','-loglevel','error','-y','-ss',str(s),'-to',str(e if speed==1 else s+(e-s)),'-i',f,'-an','-vf',vf,'-c:v','libx264','-preset','medium','-crf','16','-r','30',o],check=True)
