@@ -36,7 +36,14 @@ os.makedirs(f'{OUT}/shots',exist_ok=True); lst=[]
 for i,(f,s,e,speed,need) in enumerate(chosen):
     o=f'{OUT}/shots/s{i:02d}.mp4'; lst.append(o)
     z=plan[i][3] if len(plan[i])>3 else 0
+    roll=plan[i][4] if len(plan[i])>4 else 0
     vf=f'setpts=(PTS-STARTPTS)/{speed},scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30'
+    if roll:  # horizon fix: rotate back, zoom just enough to hide corners
+        import math
+        th=math.radians(abs(roll)); k=math.cos(th)+(1920/1080)*math.sin(th)
+        W2,H2=int(1080*k)//2*2,int(1920*k)//2*2
+        vf+=f",scale={W2}:{H2},rotate={-roll}*PI/180:ow={W2}:oh={H2}:bilinear=1,crop=1080:1920"
+
     if z:  # slow push-in: 1.0 -> 1+z over the shot
         n=int(round(need*30))
         vf+=f",scale=2160:3840,zoompan=z='1+{z}*on/{n}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30"
